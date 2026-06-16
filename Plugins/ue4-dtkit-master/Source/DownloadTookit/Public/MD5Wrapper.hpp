@@ -2,10 +2,6 @@
 #include "Misc/SecureHash.h"
 #include "Containers/UnrealString.h"
 
-/**
- * UE 5.7 适配版 MD5Wrapper
- * 用引擎内置 FMD5 替代 OpenSSL，无需 SSL 模块依赖
- */
 struct FMD5Wrapper
 {
 	FMD5Wrapper()
@@ -21,7 +17,7 @@ struct FMD5Wrapper
 		}
 	}
 
-	inline const char* Final()
+	inline const FString& Final()
 	{
 		if (!bFinaled)
 		{
@@ -33,12 +29,12 @@ struct FMD5Wrapper
 			}
 			bFinaled = true;
 		}
-		return TCHAR_TO_ANSI(*Md5String);
+		return Md5String;
 	}
 
-	inline const char* GetMd5() const
+	inline const FString& GetMd5() const
 	{
-		return bFinaled ? TCHAR_TO_ANSI(*Md5String) : nullptr;
+		return Md5String;
 	}
 
 	inline void Reset()

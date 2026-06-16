@@ -23,8 +23,15 @@ static FString GetFileNameByURL(const FString& InURL);
 
 UDownloadProxy::UDownloadProxy()
 	:Super()
+	,Status(EDownloadStatus::NotStarted)
+	,TotalDownloadedByte(0)
+	,LastRequestedTotalByte(0)
+	,DownloadSpeed(0)
+	,DeltaTime(0.f)
+	,bUseSlice(false)
+	,SliceCount(0)
+	,SliceByteSize(0)
 {
-	Reset();
 }
 
 void UDownloadProxy::RequestDownload(const FString& InURL, const FString& InSavePathOpt, bool bInSliceOpt, int32 InSliceByteSizeOpt, bool bInForceOpt)
@@ -376,7 +383,7 @@ void UDownloadProxy::OnDownloadComplete(FHttpRequestPtr RequestPtr, FHttpRespons
 #endif
 	if (bDownloadSuccessd)
 	{
-		InternalDownloadFileInfo.HASH = ANSI_TO_TCHAR(Md5Proxy.Final());
+		InternalDownloadFileInfo.HASH = Md5Proxy.Final();
 		UE_LOG(DownloadTookitLog, Warning, TEXT("OnDownloadComplete:Hash calc result is %s"), *InternalDownloadFileInfo.HASH);
 	}
 	DownloadSpeed = 0;
