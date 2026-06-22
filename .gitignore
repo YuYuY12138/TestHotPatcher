@@ -1,18 +1,7 @@
 #########
 #
-# This file tells Git about engine files that never really belong in source control.  They are usually build products, log 
-# files and intermediate files generated from a compiler or the engine runtime.
+# This file tells Git about engine files that never really belong in source control.
 #
-#
-# NOTE:
-#  Paths that start with / match paths relative to the root (where the .gitignore file is)
-#  Paths that end with / will match a folder and all files under it (but not a regular file with no extension)
-#  Use * for wildcards.  Wildcards stop at path separators
-#  Use ** for a wildcard that spans path separators
-#  Paths in this file should use forward slash characters, not back slashes
-#  Use \ to escape special characters like ! and #
-#  Use ! to negate a previous pattern.  But it doesn't work if the parent sub-folder was masked out already.
-# 
 
 # Visual Studio user specific files
 .vs/
@@ -32,18 +21,16 @@
 *.pch
 
 # Compiled Dynamic libraries
-*.so
 *.dylib
 *.dll
 
 # Fortran module files
 *.mod
 
-# Compiled Static libraries
+# Compiled Static libraries (project-level, not ThirdParty)
 *.lai
 *.la
-*.a
-*.lib
+*.exp
 
 # Executables
 *.exe
@@ -97,7 +84,6 @@ DerivedDataCache/
 enc_temp_folder/
 .va/
 *.sln.DotSettings.user
-*.exp
 *.target
 *.modules
 *.sav
@@ -119,27 +105,36 @@ enc_temp_folder/
 # DDC
 /DerivedDataCache
 
-# Plugins
+# Plugins binaries/intermediate (generated)
 /Plugins/*/Binaries/*
 /Plugins/*/Intermediate/*
-!/Plugins/LuaExtension/Source/ThirdParty/**/*.lib
-!/Plugins/LuaExtension/Source/ThirdParty/**/*.dll
-!/Plugins/LuaExtension/Source/ThirdParty/**/*.a
-!/Plugins/LuaExtension/Source/ThirdParty/**/*.so
-!/Plugins/LuaExtension/Source/ThirdParty/**/*.dylib
 
-# Project Content
-/Content
-
-#UnLua
+# UnLua build artifacts
 /Plugins/UnLua/Source/UnLuaDefaultParamCollectorUbtPlugin/obj
 /Plugins/UnLua/Source/UnLuaDefaultParamCollectorUbtPlugin/UnLuaDefaultParamCollectorUbtPlugin.ubtplugin.csproj.props
+# Keep Lua precompiled libraries
+!/Plugins/UnLua/Source/ThirdParty/**/*.a
+!/Plugins/UnLua/Source/ThirdParty/**/*.lib
+!/Plugins/UnLua/Source/ThirdParty/**/*.so
+!/Plugins/UnLua/Source/ThirdParty/**/*.dylib
 
-#RiderLink
+# RiderLink
 /Plugins/Developer
+
+# Project Content (large binary assets, managed separately)
+/Content
+
+# Android build output (APK/OBB, not for source control)
+/Android_ASTC/
+
+# Temp scripts and scratch files
+/Temp/
 
 # Logs
 *.log
 
 # Windows platform build output
 /Windows/
+
+# JetBrains logs
+JetBrainsLog*.log
