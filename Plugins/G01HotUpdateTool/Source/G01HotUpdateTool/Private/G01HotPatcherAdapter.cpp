@@ -9,6 +9,18 @@
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
 
+static void DumpSettingsToFile(const FString& DumpPath, const FString& JsonContent)
+{
+    if (FFileHelper::SaveStringToFile(JsonContent, *DumpPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Adapter][DUMP] Settings dumped to: %s"), *DumpPath);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Adapter][DUMP] Failed to write dump: %s"), *DumpPath);
+    }
+}
+
 bool FG01HotPatcherAdapter::ExportRelease(
     const FString& Version,
     const FString& Platform,
@@ -16,8 +28,14 @@ bool FG01HotPatcherAdapter::ExportRelease(
     const FString& OutputDir,
     FString& OutError)
 {
-    // 1. 加载模板 JSON
     FString FullTemplatePath = ResolvePath(TemplatePath);
+
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] ============ ExportRelease ============"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] Version:      %s"), *Version);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] Platform:     %s"), *Platform);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] Template:     %s"), *FullTemplatePath);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] OutputDir:    %s"), *OutputDir);
+
     FString JsonContent;
     if (!FFileHelper::LoadFileToString(JsonContent, *FullTemplatePath))
     {
@@ -25,7 +43,6 @@ bool FG01HotPatcherAdapter::ExportRelease(
         return false;
     }
 
-    // 2. 反序列化为 Settings 结构体
     FExportReleaseSettings Settings;
     if (!THotPatcherTemplateHelper::TDeserializeJsonStringAsStruct(JsonContent, Settings))
     {
@@ -33,19 +50,21 @@ bool FG01HotPatcherAdapter::ExportRelease(
         return false;
     }
 
-    // 3. 覆盖关键字段
+    // 只覆盖必要字段，其余来自模板
     Settings.VersionId = Version;
     Settings.SavePath.Path = OutputDir;
-    Settings.bStandaloneMode = false;  // Commandlet 已是独立进程，不再套子进程
+    Settings.bStandaloneMode = false;
 
-    UE_LOG(LogTemp, Log, TEXT("[Adapter] ExportRelease: Version=%s, Platform=%s, Output=%s"),
-        *Version, *Platform, *OutputDir);
+    FString FinalJson;
+    THotPatcherTemplateHelper::TSerializeStructAsJsonString(Settings, FinalJson);
+    FString DumpPath = FPaths::Combine(OutputDir, FString::Printf(TEXT("Dump_FinalReleaseConfig_%s.json"), *Version));
+    DumpSettingsToFile(DumpPath, FinalJson);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] FinalConfigDump: %s"), *DumpPath);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] ============================================="));
 
-    // 4. 创建并执行 Proxy
     UReleaseProxy* Proxy = NewObject<UReleaseProxy>();
     Proxy->AddToRoot();
     Proxy->Init(&Settings);
-
     Proxy->OnShowMsg.AddLambda([](const FString& Msg)
     {
         UE_LOG(LogTemp, Log, TEXT("[HotPatcher Release] %s"), *Msg);
@@ -74,8 +93,27 @@ bool FG01HotPatcherAdapter::BuildPatch(
     TArray<FString>& OutPakPaths,
     FString& OutError)
 {
-    // 1. 加载模板 JSON
     FString FullTemplatePath = ResolvePath(TemplatePath);
+    FString ResolvedBaseRelease = ResolvePath(BaseReleaseJson);
+
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] ============ BuildPatch ============"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] BaseVersion:     %s"), *BaseVersion);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] TargetVersion:   %s"), *TargetVersion);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] Platform:        %s"), *Platform);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] PatchTemplate:   %s"), *FullTemplatePath);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] BaseRelease:     %s"), *ResolvedBaseRelease);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] OutputDir:       %s"), *OutputDir);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bCookAssets:     %s"), bCookAssets ? TEXT("true") : TEXT("false"));
+
+    if (!IFileManager::Get().FileExists(*ResolvedBaseRelease))
+    {
+        UE_LOG(LogTemp, Error, TEXT("[Adapter][DIAG] BaseRelease NOT FOUND: %s"), *ResolvedBaseRelease);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] BaseRelease exists: OK"));
+    }
+
     FString JsonContent;
     if (!FFileHelper::LoadFileToString(JsonContent, *FullTemplatePath))
     {
@@ -83,7 +121,6 @@ bool FG01HotPatcherAdapter::BuildPatch(
         return false;
     }
 
-    // 2. 反序列化为 Settings 结构体
     FExportPatchSettings Settings;
     if (!THotPatcherTemplateHelper::TDeserializeJsonStringAsStruct(JsonContent, Settings))
     {
@@ -91,16 +128,15 @@ bool FG01HotPatcherAdapter::BuildPatch(
         return false;
     }
 
-    // 3. 覆盖关键字段
+    // 只覆盖必要字段，其余来自模板
     Settings.VersionId = TargetVersion;
     Settings.bByBaseVersion = true;
-    Settings.BaseVersion.FilePath = ResolvePath(BaseReleaseJson);
+    Settings.BaseVersion.FilePath = ResolvedBaseRelease;
     Settings.SavePath.Path = OutputDir;
     Settings.bStandaloneMode = false;
     Settings.bCookPatchAssets = bCookAssets;
-    Settings.bStorageNewRelease = true;  // 同步生成 CandidateRelease，供 PromoteToRelease 使用
+    Settings.bStorageNewRelease = true;
 
-    // 4. 设置目标平台
     int32 PlatformEnumValue;
     if (!GetTargetPlatformEnum(Platform, PlatformEnumValue))
     {
@@ -110,14 +146,44 @@ bool FG01HotPatcherAdapter::BuildPatch(
     Settings.PakTargetPlatforms.Empty();
     Settings.PakTargetPlatforms.Add(static_cast<ETargetPlatform>(PlatformEnumValue));
 
-    UE_LOG(LogTemp, Log, TEXT("[Adapter] BuildPatch: Base=%s, Target=%s, Platform=%s, Output=%s"),
-        *BaseVersion, *TargetVersion, *Platform, *OutputDir);
+    // Dump 最终 Settings（执行前）
+    FString FinalJson;
+    THotPatcherTemplateHelper::TSerializeStructAsJsonString(Settings, FinalJson);
+    FString DumpPath = FPaths::Combine(OutputDir, FString::Printf(TEXT("Dump_FinalPatchConfig_%s.json"), *TargetVersion));
+    DumpSettingsToFile(DumpPath, FinalJson);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] FinalConfigDump: %s"), *DumpPath);
 
-    // 5. 创建并执行 Proxy
+    // 关键字段快照
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] --- Key Settings ---"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] VersionId:           %s"), *Settings.VersionId);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bByBaseVersion:      %s"), Settings.bByBaseVersion ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] BaseReleasePath:     %s"), *Settings.BaseVersion.FilePath);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] SavePath:            %s"), *Settings.SavePath.Path);
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bCookPatchAssets:    %s"), Settings.bCookPatchAssets ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bStandaloneMode:     %s"), Settings.bStandaloneMode ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bStorageNewRelease:  %s"), Settings.bStorageNewRelease ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bAnalysisFilterDeps: %s"), Settings.AssetScanConfig.bAnalysisFilterDependencies ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bForceSkipContent:   %s"), Settings.AssetScanConfig.bForceSkipContent ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] IncludeFilters: %d"), Settings.AssetScanConfig.AssetIncludeFilters.Num());
+    for (const auto& F : Settings.AssetScanConfig.AssetIncludeFilters)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG]   + %s"), *F.Path);
+    }
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] IgnoreFilters: %d"), Settings.AssetScanConfig.AssetIgnoreFilters.Num());
+    for (const auto& F : Settings.AssetScanConfig.AssetIgnoreFilters)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG]   - %s"), *F.Path);
+    }
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] ForceSkipRules: %d"), Settings.AssetScanConfig.ForceSkipContentRules.Num());
+    for (const auto& F : Settings.AssetScanConfig.ForceSkipContentRules)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG]   skip: %s"), *F.Path);
+    }
+    UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] ============================================="));
+
     UPatcherProxy* Proxy = NewObject<UPatcherProxy>();
     Proxy->AddToRoot();
     Proxy->Init(&Settings);
-
     Proxy->OnShowMsg.AddLambda([](const FString& Msg)
     {
         UE_LOG(LogTemp, Log, TEXT("[HotPatcher Patch] %s"), *Msg);
@@ -132,7 +198,6 @@ bool FG01HotPatcherAdapter::BuildPatch(
         return false;
     }
 
-    // 6. 扫描产物目录中的 .pak 文件
     IFileManager& FM = IFileManager::Get();
     TArray<FString> FoundFiles;
     FM.FindFilesRecursive(FoundFiles, *OutputDir, TEXT("*.pak"), true, false);
@@ -147,14 +212,12 @@ bool FG01HotPatcherAdapter::BuildPatch(
         return false;
     }
 
-    UE_LOG(LogTemp, Log, TEXT("[Adapter] BuildPatch completed: %d pak file(s) generated"), OutPakPaths.Num());
+    UE_LOG(LogTemp, Log, TEXT("[Adapter] BuildPatch completed: %d pak file(s)"), OutPakPaths.Num());
     return true;
 }
 
 bool FG01HotPatcherAdapter::GetTargetPlatformEnum(const FString& PlatformName, int32& OutEnumValue)
 {
-    // HotPatcher 使用动态扩展枚举，平台名在运行时通过 AppendEnumeraters 添加
-    // 通过 StaticEnum 按字符串查找对应的枚举值
     const UEnum* Enum = StaticEnum<ETargetPlatform>();
     if (Enum)
     {
@@ -173,17 +236,20 @@ bool FG01HotPatcherAdapter::GetTargetPlatformEnum(const FString& PlatformName, i
 FString FG01HotPatcherAdapter::ResolvePath(const FString& InPath)
 {
     FString Result = InPath;
-
-    // 替换 [PROJECTDIR] 为实际项目路径
     FString ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
     Result.ReplaceInline(TEXT("[PROJECTDIR]"), *ProjectDir);
 
-    // 判断是否为相对路径（不以盘符或/开头）
     bool bIsRelative = true;
     if (!Result.IsEmpty())
     {
-        if (Result.Len() >= 2 && Result[1] == TEXT(':')) bIsRelative = false;
-        else if (Result[0] == TEXT('/') || Result[0] == TEXT('\\')) bIsRelative = false;
+        if (Result.Len() >= 2 && Result[1] == TEXT(':'))
+        {
+            bIsRelative = false;
+        }
+        else if (Result[0] == TEXT('/') || Result[0] == TEXT('\\'))
+        {
+            bIsRelative = false;
+        }
     }
 
     if (bIsRelative)

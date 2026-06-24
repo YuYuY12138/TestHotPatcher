@@ -2,6 +2,7 @@
     "taskType": "BuildPatch",
     "platform": "Android",
     "patchType": "Snapshot",
+    "basePackageVersion": "1.0.0",
     "baseVersion": "1.0.0",
     "targetVersion": "1.0.1",
     "releaseConfigTemplate": "ReleaseTest.json",

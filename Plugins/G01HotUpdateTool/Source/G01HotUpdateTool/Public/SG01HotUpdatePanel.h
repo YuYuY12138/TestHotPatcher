@@ -4,14 +4,10 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 #include "G01BuildReport.h"
+#include "HAL/PlatformProcess.h"
 
-/**
- * SG01HotUpdatePanel - G01 热更新出包面板
- *
- * 四个区块：版本状态、操作、确认摘要、构建结果
- * 三种动作：Export Release / Build Snapshot Patch / Promote to Release
- * 不暴露 HotPatcher 原始概念
- */
+class SScrollBox;
+
 class SG01HotUpdatePanel : public SCompoundWidget
 {
 public:
@@ -19,18 +15,18 @@ public:
     SLATE_END_ARGS()
 
     void Construct(const FArguments& InArgs);
+    virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
 private:
-    // ---- 数据 ----
     FG01BuildHistory History;
 
     // ---- 操作区 ----
-    /** 0=ExportRelease, 1=BuildPatch, 2=PromoteToRelease */
     int32 ActionIndex = 0;
-    FString InputReleaseVersion;         // ExportRelease 时手动输入
-    FString SelectedBaseVersion;         // BuildPatch 时从下拉选
-    FString InputTargetVersion;          // BuildPatch 时手动输入
-    FString SelectedPromotePatchVersion; // Promote 时从下拉选
+    FString InputBasePackageVersion;
+    FString InputReleaseVersion;
+    FString SelectedBaseVersion;
+    FString InputTargetVersion;
+    FString SelectedPromotePatchVersion;
 
     // ---- 下拉选项 ----
     TArray<TSharedPtr<FString>> BaseVersionOptions;
@@ -43,27 +39,40 @@ private:
     bool bShowSummary = false;
     bool bIsBuilding = false;
 
-    // ---- 结果 ----
-    FString ResultText;
+    // ---- 异步进程 + Pipe ----
+    FProcHandle BuildProcHandle;
+    void* ReadPipe = nullptr;
+    void* WritePipe = nullptr;
+
+    // ---- 实时日志 ----
+    FString BuildLog;
+    FString CurrentLogPath;
+    bool bBuildHasErrors = false;
+    TSharedPtr<SScrollBox> LogScrollBox;
+
+    // ---- 结果摘要 ----
+    FString ResultSummary;
 
     // ---- 表格数据 ----
     TArray<TSharedPtr<FG01BuildHistoryEntry>> ReleaseRows;
     TArray<TSharedPtr<FG01BuildHistoryEntry>> PatchRows;
 
-    // ---- 方法 ----
     void RefreshHistory();
     FString GetOutputRoot() const;
     void GenerateSummary();
     void ExecuteBuild();
     void OnBuildComplete(int32 ReturnCode);
+    void AppendLog(const FString& NewText);
 
     TSharedRef<ITableRow> MakeReleaseRow(TSharedPtr<FG01BuildHistoryEntry> Item, const TSharedRef<STableViewBase>& Owner);
     TSharedRef<ITableRow> MakePatchRow(TSharedPtr<FG01BuildHistoryEntry> Item, const TSharedRef<STableViewBase>& Owner);
 
-    // ---- 回调 ----
     FReply OnRefreshClicked();
     FReply OnGenerateClicked();
     FReply OnConfirmClicked();
     FReply OnCancelClicked();
     FReply OnOpenDirClicked();
+    FReply OnClearLogClicked();
+    FReply OnOpenLogFileClicked();
+    FReply OnCopyErrorClicked();
 };

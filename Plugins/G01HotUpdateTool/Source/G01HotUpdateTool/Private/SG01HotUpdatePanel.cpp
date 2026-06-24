@@ -5,13 +5,27 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SComboBox.h"
+//#include "Widgets/Input/SMultiLineEditableText.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformFileManager.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "G01HotUpdatePanel"
+
+static FString FormatBuildTime(const FString& IsoUtc)
+{
+    if (IsoUtc.IsEmpty()) return TEXT("-");
+    FDateTime Dt;
+    if (!FDateTime::ParseIso8601(*IsoUtc, Dt)) return IsoUtc;
+    FDateTime Local = Dt + (FDateTime::Now() - FDateTime::UtcNow());
+    return FString::Printf(TEXT("%04d-%02d-%02d %02d:%02d"),
+        Local.GetYear(), Local.GetMonth(), Local.GetDay(),
+        Local.GetHour(), Local.GetMinute());
+}
 
 static TArray<TSharedPtr<FString>> GActions = {
     MakeShareable(new FString(TEXT("Export Release"))),
@@ -27,7 +41,7 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
     [
         SNew(SScrollBox)
 
-        // ===== 标题 =====
+        // ===== 标题栏 =====
         + SScrollBox::Slot().Padding(8)
         [
             SNew(SHorizontalBox)
@@ -39,8 +53,39 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
 
         + SScrollBox::Slot().Padding(8, 2) [ SNew(SSeparator) ]
 
-        // ===== Release 表 =====
+        // ===== 版本总览区 =====
         + SScrollBox::Slot().Padding(8)
+        [
+            SNew(SVerticalBox)
+            + SVerticalBox::Slot().AutoHeight()
+            [ SNew(STextBlock).Text(LOCTEXT("OverviewH", "Version Overview")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
+            [
+                SNew(STextBlock)
+                .Text_Lambda([this]() -> FText
+                {
+                    const FG01BasePackageInfo* BP = History.GetActiveBasePackage();
+                    FString ActivePkg = TEXT("(none)");
+                    FString LinkedRel = TEXT("-");
+                    if (BP) { ActivePkg = BP->PackageVersion; LinkedRel = BP->LinkedReleaseVersion; }
+                    else
+                    {
+                        for (const FG01BuildHistoryEntry& E : History.Entries)
+                            if (E.PatchType == TEXT("Release") && !E.BasePackageVersion.IsEmpty())
+                            { ActivePkg = E.BasePackageVersion; LinkedRel = E.TargetVersion; break; }
+                    }
+                    FString LatestRes = History.LatestPatchVersion.IsEmpty() ? History.LatestReleaseVersion : History.LatestPatchVersion;
+                    return FText::FromString(FString::Printf(TEXT(
+                        "Active Base Package:  %s\nLinked Base Release:  %s\nLatest Resource Ver:  %s"),
+                        *ActivePkg, *LinkedRel, LatestRes.IsEmpty() ? TEXT("-") : *LatestRes));
+                })
+            ]
+        ]
+
+        + SScrollBox::Slot().Padding(8, 2) [ SNew(SSeparator) ]
+
+        // ===== Release 表 =====
+        + SScrollBox::Slot().Padding(8, 4, 8, 16)
         [
             SNew(SVerticalBox)
             + SVerticalBox::Slot().AutoHeight()
@@ -52,34 +97,36 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 .OnGenerateRow(this, &SG01HotUpdatePanel::MakeReleaseRow)
                 .HeaderRow(
                     SNew(SHeaderRow)
-                    + SHeaderRow::Column("V").DefaultLabel(LOCTEXT("V","Version")).FillWidth(0.2f)
-                    + SHeaderRow::Column("P").DefaultLabel(LOCTEXT("P","Platform")).FillWidth(0.15f)
-                    + SHeaderRow::Column("T").DefaultLabel(LOCTEXT("T","Build Time")).FillWidth(0.4f)
-                    + SHeaderRow::Column("R").DefaultLabel(LOCTEXT("R","Result")).FillWidth(0.15f)
+                    + SHeaderRow::Column("BPV").DefaultLabel(LOCTEXT("BPV","BasePackage")).FillWidth(0.15f)
+                    + SHeaderRow::Column("V").DefaultLabel(LOCTEXT("V","Version")).FillWidth(0.15f)
+                    + SHeaderRow::Column("P").DefaultLabel(LOCTEXT("P","Platform")).FillWidth(0.1f)
+                    + SHeaderRow::Column("T").DefaultLabel(LOCTEXT("T","Build Time")).FillWidth(0.35f)
+                    + SHeaderRow::Column("R").DefaultLabel(LOCTEXT("R","Result")).FillWidth(0.1f)
                 )
             ]
         ]
 
         // ===== Patch 表 =====
-        + SScrollBox::Slot().Padding(8)
+        + SScrollBox::Slot().Padding(8, 4, 8, 16)
         [
             SNew(SVerticalBox)
             + SVerticalBox::Slot().AutoHeight()
             [ SNew(STextBlock).Text(LOCTEXT("PaH", "Patches")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
-            + SVerticalBox::Slot().AutoHeight().MaxHeight(180)
+            + SVerticalBox::Slot().AutoHeight().MaxHeight(200)
             [
                 SNew(SListView<TSharedPtr<FG01BuildHistoryEntry>>)
                 .ListItemsSource(&PatchRows)
                 .OnGenerateRow(this, &SG01HotUpdatePanel::MakePatchRow)
                 .HeaderRow(
                     SNew(SHeaderRow)
-                    + SHeaderRow::Column("B").DefaultLabel(LOCTEXT("B","Base")).FillWidth(0.1f)
-                    + SHeaderRow::Column("TG").DefaultLabel(LOCTEXT("TG","Target")).FillWidth(0.1f)
-                    + SHeaderRow::Column("TY").DefaultLabel(LOCTEXT("TY","Type")).FillWidth(0.1f)
-                    + SHeaderRow::Column("SZ").DefaultLabel(LOCTEXT("SZ","Size")).FillWidth(0.12f)
-                    + SHeaderRow::Column("M5").DefaultLabel(LOCTEXT("M5","MD5")).FillWidth(0.18f)
+                    + SHeaderRow::Column("BPV").DefaultLabel(LOCTEXT("BPVP","BasePkg")).FillWidth(0.1f)
+                    + SHeaderRow::Column("B").DefaultLabel(LOCTEXT("B","Base")).FillWidth(0.08f)
+                    + SHeaderRow::Column("TG").DefaultLabel(LOCTEXT("TG","Target")).FillWidth(0.08f)
+                    + SHeaderRow::Column("TY").DefaultLabel(LOCTEXT("TY","Type")).FillWidth(0.09f)
+                    + SHeaderRow::Column("SZ").DefaultLabel(LOCTEXT("SZ","Size")).FillWidth(0.1f)
+                    + SHeaderRow::Column("M5").DefaultLabel(LOCTEXT("M5","MD5")).FillWidth(0.17f)
                     + SHeaderRow::Column("BT").DefaultLabel(LOCTEXT("BT","Time")).FillWidth(0.2f)
-                    + SHeaderRow::Column("RS").DefaultLabel(LOCTEXT("RS","OK")).FillWidth(0.08f)
+                    + SHeaderRow::Column("RS").DefaultLabel(LOCTEXT("RS","OK")).FillWidth(0.07f)
                 )
             ]
         ]
@@ -93,7 +140,6 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             + SVerticalBox::Slot().AutoHeight()
             [ SNew(STextBlock).Text(LOCTEXT("AcH", "Build Action")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
 
-            // Action 下拉
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
                 SNew(SHorizontalBox)
@@ -111,7 +157,19 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 ]
             ]
 
-            // ExportRelease: 手动输入版本号
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("BpvL", "Base Package Ver:")) ]
+                + SHorizontalBox::Slot().FillWidth(0.7f)
+                [
+                    SNew(SEditableTextBox)
+                    .Text_Lambda([this]() { return FText::FromString(InputBasePackageVersion); })
+                    .HintText(LOCTEXT("BpvH", "e.g. 1.0.0"))
+                    .OnTextCommitted_Lambda([this](const FText& T, ETextCommit::Type) { InputBasePackageVersion = T.ToString(); bShowSummary = false; })
+                ]
+            ]
+
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
                 SNew(SHorizontalBox)
@@ -126,7 +184,6 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 ]
             ]
 
-            // BuildPatch: Base 下拉 + Target 输入
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
                 SNew(SHorizontalBox)
@@ -136,7 +193,9 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 [
                     SNew(SComboBox<TSharedPtr<FString>>)
                     .OptionsSource(&BaseVersionOptions)
-                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) { SelectedBaseVersion = *V; bShowSummary = false; })
+                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) {
+                        if (V.IsValid()) { SelectedBaseVersion = *V; bShowSummary = false; }
+                    })
                     .OnGenerateWidget_Lambda([](TSharedPtr<FString> I) { return SNew(STextBlock).Text(FText::FromString(*I)); })
                     [ SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(SelectedBaseVersion.IsEmpty() ? TEXT("(select release)") : SelectedBaseVersion); }) ]
                 ]
@@ -155,7 +214,6 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 ]
             ]
 
-            // PromoteToRelease: 选择成功 Patch
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
                 SNew(SHorizontalBox)
@@ -165,13 +223,19 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 [
                     SNew(SComboBox<TSharedPtr<FString>>)
                     .OptionsSource(&PromotablePatchOptions)
-                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) { SelectedPromotePatchVersion = *V; bShowSummary = false; })
+                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) {
+                        if (!V.IsValid()) return;
+                        SelectedPromotePatchVersion = *V;
+                        for (const FG01BuildHistoryEntry& E : History.Entries)
+                            if (E.TargetVersion == *V && E.PatchType != TEXT("Release") && !E.BasePackageVersion.IsEmpty())
+                            { InputBasePackageVersion = E.BasePackageVersion; break; }
+                        bShowSummary = false;
+                    })
                     .OnGenerateWidget_Lambda([](TSharedPtr<FString> I) { return SNew(STextBlock).Text(FText::FromString(*I)); })
                     [ SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(SelectedPromotePatchVersion.IsEmpty() ? TEXT("(select patch)") : SelectedPromotePatchVersion); }) ]
                 ]
             ]
 
-            // Generate 按钮
             + SVerticalBox::Slot().AutoHeight().Padding(0, 8)
             [
                 SNew(SButton).Text(LOCTEXT("Gen", "Generate"))
@@ -181,7 +245,7 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             ]
         ]
 
-        // ===== 确认摘要 =====
+        // ===== 确认摘要区 =====
         + SScrollBox::Slot().Padding(8)
         [
             SNew(SVerticalBox)
@@ -208,21 +272,145 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
 
         + SScrollBox::Slot().Padding(8, 2) [ SNew(SSeparator) ]
 
-        // ===== 结果区 =====
+        // ===== 构建结果 + 实时日志区 =====
         + SScrollBox::Slot().Padding(8)
         [
             SNew(SVerticalBox)
+
+            // 结果标题 + 按钮行
             + SVerticalBox::Slot().AutoHeight()
-            [ SNew(STextBlock).Text(LOCTEXT("RsH", "Build Result")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().FillWidth(1.f)
+                [ SNew(STextBlock).Text(LOCTEXT("RsH", "Build Log")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+                [ SNew(SButton).Text(LOCTEXT("ClrLog", "Clear")).OnClicked(this, &SG01HotUpdatePanel::OnClearLogClicked) ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+                [ SNew(SButton).Text(LOCTEXT("OpenLog", "Open Log File")).OnClicked(this, &SG01HotUpdatePanel::OnOpenLogFileClicked) ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+                [ SNew(SButton).Text(LOCTEXT("CpyErr", "Copy Errors")).OnClicked(this, &SG01HotUpdatePanel::OnCopyErrorClicked) ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+                [ SNew(SButton).Text(LOCTEXT("OpD", "Open Output Dir")).OnClicked(this, &SG01HotUpdatePanel::OnOpenDirClicked) ]
+            ]
+
+            // 结果摘要（成功/失败/错误提示）
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
-            [ SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(ResultText.IsEmpty() ? TEXT("No recent build.") : ResultText); }).AutoWrapText(true) ]
+            [
+                SNew(STextBlock)
+                .Text_Lambda([this]() { return FText::FromString(ResultSummary); })
+                .ColorAndOpacity_Lambda([this]() {
+                    if (ResultSummary.Contains(TEXT("COMPLETE"))) return FSlateColor(FLinearColor::Green);
+                    if (ResultSummary.Contains(TEXT("FAILED")) || ResultSummary.Contains(TEXT("ERROR"))) return FSlateColor(FLinearColor::Red);
+                    return FSlateColor(FLinearColor::White);
+                })
+                .AutoWrapText(true)
+            ]
+
+            // 实时日志文本框（SBox 固定容器高度，STextBlock 内部自由增长，ScrollBox 才能真正滚动）
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
-            [ SNew(SButton).Text(LOCTEXT("OpD", "Open Output Directory")).OnClicked(this, &SG01HotUpdatePanel::OnOpenDirClicked) ]
+            [
+                SNew(SBox).HeightOverride(350)
+                [
+                    SAssignNew(LogScrollBox, SScrollBox)
+                    + SScrollBox::Slot()
+                    [
+                        SNew(SBorder)
+                        .BorderBackgroundColor(FLinearColor(0.05f, 0.05f, 0.05f, 1.f))
+                        .Padding(4)
+                        [
+                            SNew(STextBlock)
+                            .Text_Lambda([this]() {
+                                return FText::FromString(BuildLog.IsEmpty() ? TEXT("No build output yet.") : BuildLog);
+                            })
+                            .Font(FCoreStyle::GetDefaultFontStyle("Mono", 9))
+                            .AutoWrapText(true)
+                        ]
+                    ]
+                ]
+            ]
         ]
     ];
 }
 
-// ===== 数据 =====
+// ===== Tick: 轮询进程 + 读取 Pipe =====
+
+void SG01HotUpdatePanel::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+    SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+    if (!bIsBuilding || !BuildProcHandle.IsValid()) return;
+
+    // 读取 stdout pipe 新增内容
+    if (ReadPipe)
+    {
+        FString NewOutput = FPlatformProcess::ReadPipe(ReadPipe);
+        if (!NewOutput.IsEmpty())
+        {
+            AppendLog(NewOutput);
+        }
+    }
+
+    // 新内容追加后滚到底部（在 Layout 之后执行才准确）
+    if (LogScrollBox.IsValid())
+        LogScrollBox->ScrollToEnd();
+
+    // 检查进程是否结束
+    if (!FPlatformProcess::IsProcRunning(BuildProcHandle))
+    {
+        // 最后再读一次确保不遗漏
+        if (ReadPipe)
+        {
+            FString Tail = FPlatformProcess::ReadPipe(ReadPipe);
+            if (!Tail.IsEmpty()) AppendLog(Tail);
+
+            FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
+            ReadPipe = nullptr;
+            WritePipe = nullptr;
+        }
+
+        int32 ReturnCode = 0;
+        FPlatformProcess::GetProcReturnCode(BuildProcHandle, &ReturnCode);
+        FPlatformProcess::CloseProc(BuildProcHandle);
+        BuildProcHandle.Reset();
+
+        OnBuildComplete(ReturnCode);
+    }
+}
+
+void SG01HotUpdatePanel::AppendLog(const FString& NewText)
+{
+    BuildLog += NewText;
+
+    // 检测真实构建错误（排除 DLL/PIX/profiler 等系统警告）
+    // 只有明确的引擎/HotPatcher/Commandlet 错误才算失败
+    if (!bBuildHasErrors)
+    {
+        // 排除已知无害警告
+        bool bIsHarmlessWarning =
+            NewText.Contains(TEXT("aqProf.dll")) ||
+            NewText.Contains(TEXT("VtuneApi")) ||
+            NewText.Contains(TEXT("WinPixGpu")) ||
+            NewText.Contains(TEXT("PIX capture plugin")) ||
+            NewText.Contains(TEXT("AssetDetail failed")) ||   // HotPatcher 扫描时资产找不到，是 warning 不是 error
+            NewText.Contains(TEXT("Failed to load '"));        // DLL 加载失败
+
+        if (!bIsHarmlessWarning)
+        {
+            if (NewText.Contains(TEXT("LogTemp: Error:")) ||
+                NewText.Contains(TEXT("Fatal error:")) ||
+                NewText.Contains(TEXT("BUILD FAILED")) ||
+                NewText.Contains(TEXT("Commandlet->Main return this error")) ||
+                NewText.Contains(TEXT("BASE RELEASE NOT FOUND")) ||
+                NewText.Contains(TEXT("MISMATCH")))
+            {
+                bBuildHasErrors = true;
+            }
+        }
+    }
+
+}  // ScrollToEnd 放到 Tick 里处理
+
+// ===== 数据加载 =====
 
 void SG01HotUpdatePanel::RefreshHistory()
 {
@@ -234,6 +422,10 @@ void SG01HotUpdatePanel::RefreshHistory()
     BaseVersionOptions.Empty();
     PromotablePatchOptions.Empty();
 
+    const FG01BasePackageInfo* ActiveBP = History.GetActiveBasePackage();
+    if (ActiveBP && InputBasePackageVersion.IsEmpty())
+        InputBasePackageVersion = ActiveBP->PackageVersion;
+
     for (const FG01BuildHistoryEntry& E : History.Entries)
     {
         if (E.PatchType == TEXT("Release"))
@@ -244,31 +436,22 @@ void SG01HotUpdatePanel::RefreshHistory()
         else
         {
             PatchRows.Add(MakeShareable(new FG01BuildHistoryEntry(E)));
-            // 只有成功的 Patch 才能 Promote
             if (E.bSuccess)
             {
-                // 检查是否已经被 Promote 过（已有同名 Release）
-                bool bAlreadyPromoted = false;
+                bool bPromoted = false;
                 for (const FG01BuildHistoryEntry& R : History.Entries)
-                {
-                    if (R.PatchType == TEXT("Release") && R.TargetVersion == E.TargetVersion)
-                    {
-                        bAlreadyPromoted = true;
-                        break;
-                    }
-                }
-                if (!bAlreadyPromoted)
+                    if (R.PatchType == TEXT("Release") && R.TargetVersion == E.TargetVersion) { bPromoted = true; break; }
+                if (!bPromoted)
                     PromotablePatchOptions.Add(MakeShareable(new FString(E.TargetVersion)));
             }
         }
     }
 
-    if (BaseVersionOptions.Num() > 0)
+    if (BaseVersionOptions.Num() > 0 && SelectedBaseVersion.IsEmpty())
         SelectedBaseVersion = *BaseVersionOptions.Last();
 
-    // 自动推荐下一个版本号
     FString Latest = History.LatestPatchVersion.IsEmpty() ? History.LatestReleaseVersion : History.LatestPatchVersion;
-    if (!Latest.IsEmpty())
+    if (!Latest.IsEmpty() && InputTargetVersion.IsEmpty())
     {
         int32 Dot;
         if (Latest.FindLastChar(TEXT('.'), Dot))
@@ -291,69 +474,57 @@ void SG01HotUpdatePanel::GenerateSummary()
     TArray<FString> Checks;
     bValidationPassed = true;
 
+    if (InputBasePackageVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Base Package Version empty")); bValidationPassed = false; }
+    else
+    {
+        Checks.Add(FString::Printf(TEXT("[OK] BasePackage: %s"), *InputBasePackageVersion));
+        const FG01BasePackageInfo* ActiveBP = History.GetActiveBasePackage();
+        if (ActiveBP && !ActiveBP->PackageVersion.IsEmpty() && ActiveBP->PackageVersion != InputBasePackageVersion)
+        {
+            Checks.Add(FString::Printf(TEXT("[WARN] Active BasePackage is %s, you specified %s."), *ActiveBP->PackageVersion, *InputBasePackageVersion));
+            Checks.Add(TEXT("       Cross-chain patch will be blocked if Release chain mismatch."));
+        }
+    }
+
     if (ActionIndex == 0)
     {
-        // Export Release
         SummaryText = FString::Printf(TEXT(
-            "Action:   Export Release\n"
-            "Platform: Android\n"
-            "Version:  %s\n"
-            "Output:   Saved/HotPatcher/Releases/%s/\n\n"
-            "WARNING: Please confirm workspace content corresponds to version %s."),
-            *InputReleaseVersion, *InputReleaseVersion, *InputReleaseVersion);
-
-        if (InputReleaseVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Version is empty")); bValidationPassed = false; }
-        else Checks.Add(FString::Printf(TEXT("[OK] Version: %s"), *InputReleaseVersion));
-
-        // 检查是否已存在
-        FString RelPath = FPaths::Combine(GetOutputRoot(), TEXT("Releases"), InputReleaseVersion,
-            InputReleaseVersion, InputReleaseVersion + TEXT("_Release.json"));
-        if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*RelPath))
+            "Action:          Export Release\nPlatform:        Android\nBase Package:    %s\nRelease Version: %s\n\n"
+            "WARNING: Confirm workspace content corresponds to %s."),
+            *InputBasePackageVersion, *InputReleaseVersion, *InputReleaseVersion);
+        if (InputReleaseVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Release Version empty")); bValidationPassed = false; }
+        else
         {
-            Checks.Add(FString::Printf(TEXT("[FAIL] Release %s already exists"), *InputReleaseVersion));
-            bValidationPassed = false;
+            Checks.Add(FString::Printf(TEXT("[OK] Release: %s"), *InputReleaseVersion));
+            FString RelPath = FPaths::Combine(GetOutputRoot(), TEXT("Releases"), InputReleaseVersion, InputReleaseVersion, InputReleaseVersion + TEXT("_Release.json"));
+            if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*RelPath))
+            { Checks.Add(TEXT("[FAIL] Release already exists")); bValidationPassed = false; }
         }
     }
     else if (ActionIndex == 1)
     {
-        // Build Patch
         SummaryText = FString::Printf(TEXT(
-            "Action:   Build Snapshot Patch\n"
-            "Platform: Android\n"
-            "Base:     %s\n"
-            "Target:   %s\n"
-            "Type:     Snapshot\n"
-            "Output:   Saved/HotPatcher/Patches/%s/\n\n"
-            "WARNING: Please confirm workspace content includes all %s changes.\n"
-            "This will diff current content against Release_%s."),
-            *SelectedBaseVersion, *InputTargetVersion, *InputTargetVersion,
-            *InputTargetVersion, *SelectedBaseVersion);
-
+            "Action:        Build Snapshot Patch\nPlatform:      Android\nBase Package:  %s\nBase Release:  %s\nTarget:        %s\n\n"
+            "WARNING: Confirm workspace includes all %s changes."),
+            *InputBasePackageVersion, *SelectedBaseVersion, *InputTargetVersion, *InputTargetVersion);
         if (SelectedBaseVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Base Version not selected")); bValidationPassed = false; }
-        else Checks.Add(FString::Printf(TEXT("[OK] Base: %s"), *SelectedBaseVersion));
-
         if (InputTargetVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Target Version empty")); bValidationPassed = false; }
         else if (InputTargetVersion == SelectedBaseVersion) { Checks.Add(TEXT("[FAIL] Target must differ from Base")); bValidationPassed = false; }
-        else Checks.Add(FString::Printf(TEXT("[OK] Target: %s"), *InputTargetVersion));
-
-        FString RelPath = FPaths::Combine(GetOutputRoot(), TEXT("Releases"), SelectedBaseVersion,
-            SelectedBaseVersion, SelectedBaseVersion + TEXT("_Release.json"));
-        if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*RelPath))
-            Checks.Add(TEXT("[OK] Base Release exists"));
-        else { Checks.Add(TEXT("[FAIL] Base Release not found")); bValidationPassed = false; }
+        else
+        {
+            Checks.Add(FString::Printf(TEXT("[OK] %s -> %s"), *SelectedBaseVersion, *InputTargetVersion));
+            FString RelPath = FPaths::Combine(GetOutputRoot(), TEXT("Releases"), SelectedBaseVersion, SelectedBaseVersion, SelectedBaseVersion + TEXT("_Release.json"));
+            if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*RelPath))
+                Checks.Add(TEXT("[OK] Base Release exists"));
+            else { Checks.Add(TEXT("[FAIL] Base Release not found")); bValidationPassed = false; }
+        }
     }
     else if (ActionIndex == 2)
     {
-        // Promote to Release
         SummaryText = FString::Printf(TEXT(
-            "Action:   Promote to Release\n"
-            "Platform: Android\n"
-            "Patch:    %s\n"
-            "Release:  %s\n\n"
-            "WARNING: Please confirm workspace content corresponds to %s.\n"
-            "This Release may be used as base for future patches."),
-            *SelectedPromotePatchVersion, *SelectedPromotePatchVersion, *SelectedPromotePatchVersion);
-
+            "Action:        Promote to Release\nPlatform:      Android\nBase Package:  %s\nPatch:         %s\n\n"
+            "WARNING: Confirm workspace content corresponds to %s."),
+            *InputBasePackageVersion, *SelectedPromotePatchVersion, *SelectedPromotePatchVersion);
         if (SelectedPromotePatchVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] No patch selected")); bValidationPassed = false; }
         else Checks.Add(FString::Printf(TEXT("[OK] Patch: %s"), *SelectedPromotePatchVersion));
     }
@@ -362,15 +533,19 @@ void SG01HotUpdatePanel::GenerateSummary()
     ValidationText = FString::Join(Checks, TEXT("\n"));
 }
 
-// ===== 构建 =====
+// ===== 构建执行 =====
 
 void SG01HotUpdatePanel::ExecuteBuild()
 {
+    // 清空日志
+    BuildLog.Empty();
+    bBuildHasErrors = false;
+    ResultSummary = TEXT("Building...");
     bIsBuilding = true;
-    ResultText = TEXT("Building...");
 
     FG01BuildTask Task;
     Task.Platform = TEXT("Android");
+    Task.BasePackageVersion = InputBasePackageVersion;
     Task.ReleaseConfigTemplate = TEXT("ReleaseTest.json");
     Task.PatchConfigTemplate = TEXT("PatchTest.json");
     Task.OutputDir = TEXT("Saved/HotPatcher");
@@ -397,63 +572,91 @@ void SG01HotUpdatePanel::ExecuteBuild()
     FString TaskPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher/_CurrentBuildTask.json"));
     Task.SaveToFile(TaskPath);
 
+    // 日志路径
+    FString TimeStr = FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"));
+    CurrentLogPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher"),
+        FString::Printf(TEXT("HotPatch_%s.log"), *TimeStr));
+
     FString UECmd = FPaths::Combine(FPaths::EngineDir(), TEXT("Binaries/Win64/UnrealEditor-Cmd.exe"));
     FString Project = FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath());
 
-    FProcHandle Proc = FPlatformProcess::CreateProc(*UECmd,
-        *FString::Printf(TEXT("\"%s\" -run=G01HotPatch -config=\"%s\""), *Project, *TaskPath),
-        true, false, false, nullptr, 0, nullptr, nullptr);
+    FString Params = FString::Printf(
+        TEXT("\"%s\" -run=G01HotPatch -config=\"%s\" -NoLiveCoding -NoHotReload -unattended -nop4 -stdout -FullStdOutLogOutput -FORCELOGFLUSH -abslog=\"%s\" -UTF8Output"),
+        *Project, *TaskPath, *CurrentLogPath);
 
-    if (!Proc.IsValid())
+    AppendLog(FString::Printf(TEXT("=== G01 HotPatch Build Started ===\n")));
+    AppendLog(FString::Printf(TEXT("Task: %s\nLog: %s\n\n"), *Task.TaskType, *CurrentLogPath));
+
+    // 创建 stdout pipe
+    FPlatformProcess::CreatePipe(ReadPipe, WritePipe);
+
+    BuildProcHandle = FPlatformProcess::CreateProc(
+        *UECmd, *Params,
+        false,  // bLaunchDetached - false 以便 pipe 正常工作
+        true,   // bLaunchHidden
+        true,   // bLaunchReallyHidden
+        nullptr, 0, nullptr,
+        WritePipe,   // 子进程 stdout 写入端
+        nullptr
+    );
+
+    if (!BuildProcHandle.IsValid())
     {
-        ResultText = TEXT("ERROR: Failed to launch Commandlet");
+        FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
+        ReadPipe = nullptr;
+        WritePipe = nullptr;
+        ResultSummary = TEXT("ERROR: Failed to launch Commandlet process");
         bIsBuilding = false;
-        return;
     }
-
-    FPlatformProcess::WaitForProc(Proc);
-    int32 Code;
-    FPlatformProcess::GetProcReturnCode(Proc, &Code);
-    OnBuildComplete(Code);
 }
 
-void SG01HotUpdatePanel::OnBuildComplete(int32 Code)
+void SG01HotUpdatePanel::OnBuildComplete(int32 ReturnCode)
 {
     bIsBuilding = false;
     bShowSummary = false;
     RefreshHistory();
 
-    if (Code == 0)
+    // exit code 0 = 成功（以 Commandlet 返回码为准）
+    // bBuildHasErrors 仅在有明确错误关键词时为 true，作为补充参考
+    bool bSuccess = (ReturnCode == 0);
+
+    if (bSuccess)
     {
-        ResultText = TEXT("BUILD COMPLETE\n\n");
+        ResultSummary = TEXT("BUILD COMPLETE");
         if (History.Entries.Num() > 0)
         {
             const auto& L = History.Entries.Last();
-            ResultText += FString::Printf(TEXT("Version: %s\nBase: %s\nType: %s\nPlatform: %s\nTime: %s\n"),
-                *L.TargetVersion, *L.BaseVersion, *L.PatchType, *L.Platform, *L.BuildTime);
+            ResultSummary += FString::Printf(TEXT("\nVersion: %s  BasePackage: %s  Type: %s"),
+                *L.TargetVersion, *L.BasePackageVersion, *L.PatchType);
             if (L.TotalPakSize > 0)
-                ResultText += FString::Printf(TEXT("Size: %.1f MB\n"), L.TotalPakSize / (1024.0 * 1024.0));
-            if (!L.PakMD5.IsEmpty())
-                ResultText += FString::Printf(TEXT("MD5: %s\n"), *L.PakMD5);
+                ResultSummary += FString::Printf(TEXT("  Size: %.1f MB"), L.TotalPakSize / (1024.0 * 1024.0));
         }
+    }
+    else if (bBuildHasErrors)
+    {
+        ResultSummary = FString::Printf(TEXT("BUILD FAILED (exit code: %d)\n存在错误，请查看日志"), ReturnCode);
     }
     else
     {
-        ResultText = FString::Printf(TEXT("BUILD FAILED (exit code: %d)\nCheck Output Log."), Code);
+        ResultSummary = FString::Printf(TEXT("BUILD FAILED (exit code: %d)"), ReturnCode);
     }
+
+    AppendLog(FString::Printf(TEXT("\n=== Build %s (exit: %d) ===\n"),
+        bSuccess ? TEXT("COMPLETE") : TEXT("FAILED"), ReturnCode));
 }
 
-// ===== 表格 =====
+// ===== 表格行 =====
 
 TSharedRef<ITableRow> SG01HotUpdatePanel::MakeReleaseRow(TSharedPtr<FG01BuildHistoryEntry> Item, const TSharedRef<STableViewBase>& Owner)
 {
     return SNew(STableRow<TSharedPtr<FG01BuildHistoryEntry>>, Owner)
     [
         SNew(SHorizontalBox)
-        + SHorizontalBox::Slot().FillWidth(0.2f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->TargetVersion)) ]
-        + SHorizontalBox::Slot().FillWidth(0.15f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->Platform)) ]
-        + SHorizontalBox::Slot().FillWidth(0.4f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->BuildTime)) ]
-        + SHorizontalBox::Slot().FillWidth(0.15f).Padding(4, 2)
+        + SHorizontalBox::Slot().FillWidth(0.15f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->BasePackageVersion)) ]
+        + SHorizontalBox::Slot().FillWidth(0.15f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->TargetVersion)) ]
+        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->Platform)) ]
+        + SHorizontalBox::Slot().FillWidth(0.35f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(FormatBuildTime(Item->BuildTime))) ]
+        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2)
         [ SNew(STextBlock).Text(FText::FromString(Item->bSuccess ? TEXT("OK") : TEXT("FAIL")))
             .ColorAndOpacity(Item->bSuccess ? FLinearColor::Green : FLinearColor::Red) ]
     ];
@@ -467,13 +670,14 @@ TSharedRef<ITableRow> SG01HotUpdatePanel::MakePatchRow(TSharedPtr<FG01BuildHisto
     return SNew(STableRow<TSharedPtr<FG01BuildHistoryEntry>>, Owner)
     [
         SNew(SHorizontalBox)
-        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->BaseVersion)) ]
-        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->TargetVersion)) ]
-        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->PatchType)) ]
-        + SHorizontalBox::Slot().FillWidth(0.12f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Sz)) ]
-        + SHorizontalBox::Slot().FillWidth(0.18f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(M5)) ]
-        + SHorizontalBox::Slot().FillWidth(0.2f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->BuildTime)) ]
-        + SHorizontalBox::Slot().FillWidth(0.08f).Padding(4, 2)
+        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->BasePackageVersion)) ]
+        + SHorizontalBox::Slot().FillWidth(0.08f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->BaseVersion)) ]
+        + SHorizontalBox::Slot().FillWidth(0.08f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->TargetVersion)) ]
+        + SHorizontalBox::Slot().FillWidth(0.09f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Item->PatchType)) ]
+        + SHorizontalBox::Slot().FillWidth(0.1f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(Sz)) ]
+        + SHorizontalBox::Slot().FillWidth(0.17f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(M5)) ]
+        + SHorizontalBox::Slot().FillWidth(0.2f).Padding(4, 2) [ SNew(STextBlock).Text(FText::FromString(FormatBuildTime(Item->BuildTime))) ]
+        + SHorizontalBox::Slot().FillWidth(0.07f).Padding(4, 2)
         [ SNew(STextBlock).Text(FText::FromString(Item->bSuccess ? TEXT("OK") : TEXT("FAIL")))
             .ColorAndOpacity(Item->bSuccess ? FLinearColor::Green : FLinearColor::Red) ]
     ];
@@ -485,6 +689,42 @@ FReply SG01HotUpdatePanel::OnRefreshClicked() { RefreshHistory(); return FReply:
 FReply SG01HotUpdatePanel::OnGenerateClicked() { GenerateSummary(); bShowSummary = true; return FReply::Handled(); }
 FReply SG01HotUpdatePanel::OnConfirmClicked() { ExecuteBuild(); return FReply::Handled(); }
 FReply SG01HotUpdatePanel::OnCancelClicked() { bShowSummary = false; return FReply::Handled(); }
-FReply SG01HotUpdatePanel::OnOpenDirClicked() { FPlatformProcess::ExploreFolder(*GetOutputRoot()); return FReply::Handled(); }
+
+FReply SG01HotUpdatePanel::OnClearLogClicked()
+{
+    BuildLog.Empty();
+    ResultSummary.Empty();
+    bBuildHasErrors = false;
+    return FReply::Handled();
+}
+
+FReply SG01HotUpdatePanel::OnOpenLogFileClicked()
+{
+    if (!CurrentLogPath.IsEmpty() && FPlatformFileManager::Get().GetPlatformFile().FileExists(*CurrentLogPath))
+        FPlatformProcess::LaunchFileInDefaultExternalApplication(*CurrentLogPath);
+    else
+        FPlatformProcess::ExploreFolder(*FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher")));
+    return FReply::Handled();
+}
+
+FReply SG01HotUpdatePanel::OnCopyErrorClicked()
+{
+    // 提取包含 Error/Fatal 的行
+    TArray<FString> Lines;
+    BuildLog.ParseIntoArrayLines(Lines);
+    FString Errors;
+    for (const FString& L : Lines)
+        if (L.Contains(TEXT("Error:")) || L.Contains(TEXT("Fatal:")) || L.Contains(TEXT("FAILED")))
+            Errors += L + TEXT("\n");
+    if (!Errors.IsEmpty())
+        FPlatformApplicationMisc::ClipboardCopy(*Errors);
+    return FReply::Handled();
+}
+
+FReply SG01HotUpdatePanel::OnOpenDirClicked()
+{
+    FPlatformProcess::ExploreFolder(*GetOutputRoot());
+    return FReply::Handled();
+}
 
 #undef LOCTEXT_NAMESPACE

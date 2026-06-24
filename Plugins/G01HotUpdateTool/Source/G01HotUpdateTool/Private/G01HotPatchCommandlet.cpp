@@ -7,6 +7,7 @@
 #include "Misc/SecureHash.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
+#include "Serialization/JsonSerializer.h"
 
 static bool IsRelPath(const FString& P)
 {
@@ -61,37 +62,41 @@ int32 UG01HotPatchCommandlet::Main(const FString& Params)
         return 1;
     }
 
-    UE_LOG(LogTemp, Display, TEXT("  TaskType: %s"), *Task.TaskType);
+    UE_LOG(LogTemp, Display, TEXT("  TaskType:           %s"), *Task.TaskType);
+    UE_LOG(LogTemp, Display, TEXT("  BasePackageVersion: %s"), *Task.BasePackageVersion);
+
     FString OutputRoot = ToAbs(Task.OutputDir, ProjectDir);
+    FString HistPath = FPaths::Combine(OutputRoot, TEXT("BuildHistory.json"));
 
     if (Task.TaskType == TEXT("ExportRelease"))
     {
         FString RelDir = FPaths::Combine(OutputRoot, TEXT("Releases"), Task.BaseVersion);
         FString RelJson = FPaths::Combine(RelDir, Task.BaseVersion, Task.BaseVersion + TEXT("_Release.json"));
         FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*RelDir);
-        return ExecuteExportRelease(Task, ProjectDir, RelDir, RelJson, BuildTimeStr, OutputRoot, StartTime);
+        return ExecuteExportRelease(Task, ProjectDir, RelDir, RelJson, BuildTimeStr, OutputRoot, HistPath, StartTime);
     }
     else if (Task.TaskType == TEXT("BuildPatch"))
     {
         FString RelDir = FPaths::Combine(OutputRoot, TEXT("Releases"), Task.BaseVersion);
         FString RelJson = FPaths::Combine(RelDir, Task.BaseVersion, Task.BaseVersion + TEXT("_Release.json"));
-        return ExecuteBuildPatch(Task, ProjectDir, RelDir, RelJson, BuildTimeStr, OutputRoot, StartTime);
+        return ExecuteBuildPatch(Task, ProjectDir, RelDir, RelJson, BuildTimeStr, OutputRoot, HistPath, StartTime);
     }
     else if (Task.TaskType == TEXT("PromoteToRelease"))
     {
-        return ExecutePromoteToRelease(Task, ProjectDir, BuildTimeStr, OutputRoot, StartTime);
+        return ExecutePromoteToRelease(Task, ProjectDir, BuildTimeStr, OutputRoot, HistPath, StartTime);
     }
 
     return 1;
 }
 
 // ========================================================================
-// ExportRelease - 归档当前工作区为指定版本 Release
+// ExportRelease
 // ========================================================================
 int32 UG01HotPatchCommandlet::ExecuteExportRelease(
     const FG01BuildTask& Task, const FString& ProjectDir,
     const FString& ReleasesDir, const FString& ReleaseJsonPath,
-    const FString& BuildTimeStr, const FString& OutputRoot, double StartTime)
+    const FString& BuildTimeStr, const FString& OutputRoot,
+    const FString& HistPath, double StartTime)
 {
     auto& PF = FPlatformFileManager::Get().GetPlatformFile();
 
@@ -102,7 +107,7 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         return 5;
     }
 
-    UE_LOG(LogTemp, Display, TEXT("Exporting Release %s ..."), *Task.BaseVersion);
+    UE_LOG(LogTemp, Display, TEXT("Exporting Release %s (BasePackage=%s) ..."), *Task.BaseVersion, *Task.BasePackageVersion);
     UE_LOG(LogTemp, Warning, TEXT(">>> Confirm: workspace must be at %s state <<<"), *Task.BaseVersion);
 
     FString Err;
@@ -118,6 +123,7 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         FG01BuildReport Report;
         Report.TaskType = TEXT("ExportRelease");
         Report.Platform = Task.Platform;
+        Report.BasePackageVersion = Task.BasePackageVersion;
         Report.BaseVersion = Task.BaseVersion;
         Report.TargetVersion = Task.BaseVersion;
         Report.BuildTime = BuildTimeStr;
@@ -125,18 +131,27 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         Report.bSuccess = true;
         Report.SaveToFile(FPaths::Combine(ReleasesDir, FString::Printf(TEXT("BuildReport_%s.json"), *Task.BaseVersion)));
 
-        FString HistPath = FPaths::Combine(OutputRoot, TEXT("BuildHistory.json"));
         FG01BuildHistory Hist; Hist.LoadFromFile(HistPath);
-
         FG01BuildHistoryEntry Entry;
         Entry.TargetVersion = Task.BaseVersion;
         Entry.BaseVersion = Task.BaseVersion;
         Entry.PatchType = TEXT("Release");
         Entry.Platform = Task.Platform;
+        Entry.BasePackageVersion = Task.BasePackageVersion;
         Entry.BuildTime = BuildTimeStr;
         Entry.bSuccess = true;
         Entry.ReportPath = FString::Printf(TEXT("Releases/%s/BuildReport_%s.json"), *Task.BaseVersion, *Task.BaseVersion);
         Hist.AddEntry(Entry);
+
+        // 注册 BasePackage（首次 ExportRelease 时自动注册为 active base package）
+        FG01BasePackageInfo BP;
+        BP.PackageVersion = Task.BasePackageVersion;
+        BP.Platform = Task.Platform;
+        BP.LinkedReleaseVersion = Task.BaseVersion;
+        BP.BuildTime = BuildTimeStr;
+        BP.bIsActiveBase = true;
+        Hist.RegisterBasePackage(BP);
+
         Hist.SaveToFile(HistPath);
     }
 
@@ -145,17 +160,13 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
 }
 
 // ========================================================================
-// BuildPatch - 基于已有 Release 生成差异补丁 + 同步生成 CandidateRelease
-//
-// bStorageNewRelease=true 让 HotPatcher 在 Patch 产物目录下同步生成
-// 一份 Release JSON。这份 Release 和 Patch 在同一时刻从同一工作区生成，
-// 内容一致性有保证。我们把它重命名为 CandidateRelease，
-// 供后续 PromoteToRelease 使用。
+// BuildPatch
 // ========================================================================
 int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
     const FG01BuildTask& Task, const FString& ProjectDir,
     const FString& ReleasesDir, const FString& ReleaseJsonPath,
-    const FString& BuildTimeStr, const FString& OutputRoot, double StartTime)
+    const FString& BuildTimeStr, const FString& OutputRoot,
+    const FString& HistPath, double StartTime)
 {
     auto& PF = FPlatformFileManager::Get().GetPlatformFile();
 
@@ -169,7 +180,11 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
     FString PatchDir = FPaths::Combine(OutputRoot, TEXT("Patches"), Task.TargetVersion);
     PF.CreateDirectoryTree(*PatchDir);
 
-    UE_LOG(LogTemp, Display, TEXT("Building Patch %s (base=%s) ..."), *Task.TargetVersion, *Task.BaseVersion);
+    // 提前加载 History 用于跨链校验
+    FG01BuildHistory Hist; Hist.LoadFromFile(HistPath);
+
+    UE_LOG(LogTemp, Display, TEXT("Building Patch %s->%s (BasePackage=%s) ..."),
+        *Task.BaseVersion, *Task.TargetVersion, *Task.BasePackageVersion);
     UE_LOG(LogTemp, Warning, TEXT(">>> Confirm: workspace must include %s changes <<<"), *Task.TargetVersion);
 
     FString Err;
@@ -185,35 +200,66 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
 
     UE_LOG(LogTemp, Display, TEXT("Patch build OK: %d pak(s)"), PakPaths.Num());
 
-    // ---- 处理 CandidateRelease ----
-    // HotPatcher 的 bStorageNewRelease=true 会在 PatchDir/{targetVersion}/ 下生成
-    // {targetVersion}_Release.json，我们把它重命名为 CandidateRelease
+    // 从 BuildHistory 校验 baseVersion Release 的 basePackageVersion 与本次 BuildTask 一致
+    // 防止跨基础包链打 Patch（Release_1.0.3 是 BasePackage_1.0.0 的，不能用于 BasePackage_1.1.0 的 Patch）
+    {
+        bool bReleaseFound = false;
+        for (const FG01BuildHistoryEntry& E : Hist.Entries)
+        {
+            if (E.PatchType == TEXT("Release") && E.TargetVersion == Task.BaseVersion)
+            {
+                bReleaseFound = true;
+                if (!E.BasePackageVersion.IsEmpty() && E.BasePackageVersion != Task.BasePackageVersion)
+                {
+                    UE_LOG(LogTemp, Error, TEXT("============================================"));
+                    UE_LOG(LogTemp, Error, TEXT(" BASE PACKAGE VERSION MISMATCH"));
+                    UE_LOG(LogTemp, Error, TEXT("  Release_%s belongs to BasePackage: %s"), *Task.BaseVersion, *E.BasePackageVersion);
+                    UE_LOG(LogTemp, Error, TEXT("  BuildTask.basePackageVersion:       %s"), *Task.BasePackageVersion);
+                    UE_LOG(LogTemp, Error, TEXT("  Cannot build Patch across different base package chains."));
+                    UE_LOG(LogTemp, Error, TEXT("  Fix: use basePackageVersion=%s in BuildTask."), *E.BasePackageVersion);
+                    UE_LOG(LogTemp, Error, TEXT("============================================"));
+                    return 9;
+                }
+                if (!E.BasePackageVersion.IsEmpty())
+                {
+                    UE_LOG(LogTemp, Display, TEXT("Chain verified: Release_%s belongs to BasePackage_%s"), *Task.BaseVersion, *E.BasePackageVersion);
+                }
+                else
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("Release_%s has no BasePackageVersion in History. Chain validation skipped."), *Task.BaseVersion);
+                }
+                break;
+            }
+        }
+        if (!bReleaseFound)
+            UE_LOG(LogTemp, Warning, TEXT("Release_%s not found in BuildHistory. Chain validation skipped."), *Task.BaseVersion);
+    }
+
+    // CandidateRelease 处理
     FString CandidateReleasePath;
     {
-        // 搜索 HotPatcher 生成的 Release JSON（可能在子目录下）
         TArray<FString> ReleaseFiles;
         IFileManager::Get().FindFilesRecursive(ReleaseFiles, *PatchDir,
             *FString::Printf(TEXT("%s_Release.json"), *Task.TargetVersion), true, false);
 
         if (ReleaseFiles.Num() > 0)
         {
-            FString SrcRelease = ReleaseFiles[0];
             CandidateReleasePath = FPaths::Combine(PatchDir,
                 FString::Printf(TEXT("CandidateRelease_%s.json"), *Task.TargetVersion));
-            PF.MoveFile(*CandidateReleasePath, *SrcRelease);
-            UE_LOG(LogTemp, Display, TEXT("CandidateRelease saved: %s"), *CandidateReleasePath);
+            PF.MoveFile(*CandidateReleasePath, *ReleaseFiles[0]);
+            UE_LOG(LogTemp, Display, TEXT("CandidateRelease: %s"), *CandidateReleasePath);
         }
         else
         {
-            UE_LOG(LogTemp, Warning, TEXT("No CandidateRelease generated by HotPatcher."));
-            UE_LOG(LogTemp, Warning, TEXT("PromoteToRelease will NOT be available for this version."));
-            UE_LOG(LogTemp, Warning, TEXT("To promote, rebuild the patch or use ExportRelease explicitly."));
+            UE_LOG(LogTemp, Warning, TEXT("No CandidateRelease generated. PromoteToRelease will NOT be available."));
+            UE_LOG(LogTemp, Warning, TEXT("Rebuild patch or use ExportRelease explicitly."));
         }
     }
 
-    // ---- MD5 + Manifest ----
+    // MD5 + Manifest
     FG01VersionManifest Manifest;
     Manifest.Version = Task.TargetVersion;
+    Manifest.BasePackageVersion = Task.BasePackageVersion;
     Manifest.BaseVersion = Task.BaseVersion;
     Manifest.PatchType = Task.PatchType;
     Manifest.Platform = Task.Platform;
@@ -228,7 +274,6 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
         Fi.Name = FPaths::GetCleanFilename(PakPath);
         Fi.Size = IFileManager::Get().FileSize(*PakPath);
         TotalSize += Fi.Size;
-
         if (Task.Options.bCalculateMD5)
         {
             FString MD5;
@@ -243,18 +288,15 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
     }
 
     if (Task.Options.bGenerateManifest && PakPaths.Num() > 0)
-    {
-        FString ManPath = FPaths::Combine(PatchDir, FString::Printf(TEXT("VersionManifest_%s.json"), *Task.TargetVersion));
-        Manifest.SaveToFile(ManPath);
-    }
+        Manifest.SaveToFile(FPaths::Combine(PatchDir, FString::Printf(TEXT("VersionManifest_%s.json"), *Task.TargetVersion)));
 
-    // ---- Report + History ----
     if (Task.Options.bGenerateBuildReport)
     {
         FG01BuildReport Report;
         Report.TaskType = TEXT("BuildPatch");
         Report.Platform = Task.Platform;
         Report.PatchType = Task.PatchType;
+        Report.BasePackageVersion = Task.BasePackageVersion;
         Report.BaseVersion = Task.BaseVersion;
         Report.TargetVersion = Task.TargetVersion;
         Report.BuildTime = BuildTimeStr;
@@ -268,14 +310,12 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
         }
         Report.SaveToFile(FPaths::Combine(PatchDir, FString::Printf(TEXT("BuildReport_%s.json"), *Task.TargetVersion)));
 
-        FString HistPath = FPaths::Combine(OutputRoot, TEXT("BuildHistory.json"));
-        FG01BuildHistory Hist; Hist.LoadFromFile(HistPath);
-
         FG01BuildHistoryEntry Entry;
         Entry.TargetVersion = Task.TargetVersion;
         Entry.BaseVersion = Task.BaseVersion;
         Entry.PatchType = Task.PatchType;
         Entry.Platform = Task.Platform;
+        Entry.BasePackageVersion = Task.BasePackageVersion;
         Entry.BuildTime = BuildTimeStr;
         Entry.bSuccess = true;
         Entry.TotalPakSize = TotalSize;
@@ -286,119 +326,99 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
         Hist.SaveToFile(HistPath);
     }
 
-    UE_LOG(LogTemp, Display, TEXT("BUILD PATCH COMPLETE: %s -> %s (%d paks, %.1fs)"),
-        *Task.BaseVersion, *Task.TargetVersion, PakPaths.Num(), FPlatformTime::Seconds() - StartTime);
+    UE_LOG(LogTemp, Display, TEXT("BUILD PATCH COMPLETE: %s->%s BasePackage=%s (%.1fs)"),
+        *Task.BaseVersion, *Task.TargetVersion, *Task.BasePackageVersion, FPlatformTime::Seconds() - StartTime);
     return 0;
 }
 
 // ========================================================================
-// PromoteToRelease - 从 CandidateRelease 复制为正式 Release
-//
-// 不重新扫描工作区。CandidateRelease 是 BuildPatch 时同步生成的，
-// 和 Patch Pak 在同一时刻从同一工作区产生，内容一致性有保证。
+// PromoteToRelease - 从 CandidateRelease 复制为正式 Release，继承 basePackageVersion
 // ========================================================================
 int32 UG01HotPatchCommandlet::ExecutePromoteToRelease(
     const FG01BuildTask& Task, const FString& ProjectDir,
-    const FString& BuildTimeStr, const FString& OutputRoot, double StartTime)
+    const FString& BuildTimeStr, const FString& OutputRoot,
+    const FString& HistPath, double StartTime)
 {
     auto& PF = FPlatformFileManager::Get().GetPlatformFile();
 
-    // 1. 从 History 里找到源 Patch 记录
-    FString HistPath = FPaths::Combine(OutputRoot, TEXT("BuildHistory.json"));
-    FG01BuildHistory Hist;
-    Hist.LoadFromFile(HistPath);
+    FG01BuildHistory Hist; Hist.LoadFromFile(HistPath);
 
+    // 找源 Patch，同时继承其 basePackageVersion
     FString CandidatePath;
+    FString InheritedBasePackageVersion = Task.BasePackageVersion;
     bool bFoundPatch = false;
+
     for (const FG01BuildHistoryEntry& E : Hist.Entries)
     {
         if (E.PatchType != TEXT("Release") && E.TargetVersion == Task.PromoteFromPatchVersion && E.bSuccess)
         {
             bFoundPatch = true;
             CandidatePath = E.CandidateReleasePath;
+            // 继承 Patch 记录的 basePackageVersion（比 Task 里的更可信）
+            if (!E.BasePackageVersion.IsEmpty())
+                InheritedBasePackageVersion = E.BasePackageVersion;
             break;
         }
     }
 
     if (!bFoundPatch)
     {
-        UE_LOG(LogTemp, Error, TEXT("No successful Patch found for version: %s"), *Task.PromoteFromPatchVersion);
+        UE_LOG(LogTemp, Error, TEXT("No successful Patch found for: %s"), *Task.PromoteFromPatchVersion);
         return 6;
     }
 
-    // 2. 检查 CandidateRelease 是否存在
+    // 校验 CandidateRelease
     if (CandidatePath.IsEmpty() || !PF.FileExists(*CandidatePath))
     {
-        // CandidateRelease 不存在，不静默重新扫描
-        UE_LOG(LogTemp, Error, TEXT("============================================"));
-        UE_LOG(LogTemp, Error, TEXT(" CANDIDATE RELEASE NOT FOUND"));
-        UE_LOG(LogTemp, Error, TEXT("  Expected: %s"), *CandidatePath);
-        UE_LOG(LogTemp, Error, TEXT(""));
-        UE_LOG(LogTemp, Error, TEXT("  CandidateRelease is generated during BuildPatch."));
-        UE_LOG(LogTemp, Error, TEXT("  If missing, please rebuild the patch or use"));
-        UE_LOG(LogTemp, Error, TEXT("  ExportRelease explicitly under correct workspace state."));
-        UE_LOG(LogTemp, Error, TEXT("============================================"));
+        UE_LOG(LogTemp, Error, TEXT("CANDIDATE RELEASE NOT FOUND: %s"), *CandidatePath);
+        UE_LOG(LogTemp, Error, TEXT("Rebuild patch or use ExportRelease explicitly."));
         return 7;
     }
 
-    // 3. 检查目标 Release 是否已存在
+    // 校验 JSON 可解析 + 版本号匹配
+    {
+        FString CJson;
+        if (!FFileHelper::LoadFileToString(CJson, *CandidatePath))
+        { UE_LOG(LogTemp, Error, TEXT("CandidateRelease unreadable")); return 7; }
+
+        TSharedPtr<FJsonObject> CO;
+        auto CR = TJsonReaderFactory<>::Create(CJson);
+        if (!FJsonSerializer::Deserialize(CR, CO) || !CO.IsValid())
+        { UE_LOG(LogTemp, Error, TEXT("CandidateRelease JSON parse failed")); return 7; }
+
+        FString CV = CO->GetStringField(TEXT("VersionId"));
+        if (CV != Task.TargetVersion)
+        {
+            UE_LOG(LogTemp, Error, TEXT("CandidateRelease version mismatch: file=%s, expected=%s"), *CV, *Task.TargetVersion);
+            return 7;
+        }
+        UE_LOG(LogTemp, Display, TEXT("CandidateRelease validated: version=%s"), *CV);
+    }
+
+    // 检查目标 Release 是否已存在
     FString RelDir = FPaths::Combine(OutputRoot, TEXT("Releases"), Task.TargetVersion);
     FString RelJson = FPaths::Combine(RelDir, Task.TargetVersion, Task.TargetVersion + TEXT("_Release.json"));
-
     if (PF.FileExists(*RelJson))
     {
-        UE_LOG(LogTemp, Error, TEXT("Release %s already exists: %s"), *Task.TargetVersion, *RelJson);
-        UE_LOG(LogTemp, Error, TEXT("Cannot overwrite. Delete manually if needed."));
+        UE_LOG(LogTemp, Error, TEXT("Release %s already exists"), *Task.TargetVersion);
         return 5;
     }
 
-    // 3.5 校验 CandidateRelease 内容
-    {
-        FString CandidateJson;
-        if (!FFileHelper::LoadFileToString(CandidateJson, *CandidatePath))
-        {
-            UE_LOG(LogTemp, Error, TEXT("CandidateRelease file unreadable: %s"), *CandidatePath);
-            return 7;
-        }
+    PF.CreateDirectoryTree(*FPaths::Combine(RelDir, Task.TargetVersion));
 
-        TSharedPtr<FJsonObject> CandidateObj;
-        auto Reader = TJsonReaderFactory<>::Create(CandidateJson);
-        if (!FJsonSerializer::Deserialize(Reader, CandidateObj) || !CandidateObj.IsValid())
-        {
-            UE_LOG(LogTemp, Error, TEXT("CandidateRelease JSON parse failed: %s"), *CandidatePath);
-            return 7;
-        }
-
-        FString CandidateVersion = CandidateObj->GetStringField(TEXT("VersionId"));
-        if (CandidateVersion != Task.TargetVersion)
-        {
-            UE_LOG(LogTemp, Error, TEXT("CandidateRelease version mismatch: file=%s, expected=%s"),
-                *CandidateVersion, *Task.TargetVersion);
-            return 7;
-        }
-
-        UE_LOG(LogTemp, Display, TEXT("CandidateRelease validated: version=%s"), *CandidateVersion);
-    }
-
-    // 4. 复制 CandidateRelease → 正式 Release
-    FString DestDir = FPaths::Combine(RelDir, Task.TargetVersion);
-    PF.CreateDirectoryTree(*DestDir);
-
-    UE_LOG(LogTemp, Display, TEXT("Promoting: %s"), *CandidatePath);
-    UE_LOG(LogTemp, Display, TEXT("      To: %s"), *RelJson);
+    UE_LOG(LogTemp, Display, TEXT("Promoting Patch %s -> Release %s (BasePackage=%s) ..."),
+        *Task.PromoteFromPatchVersion, *Task.TargetVersion, *InheritedBasePackageVersion);
+    UE_LOG(LogTemp, Warning, TEXT(">>> Confirm: workspace must be at %s state <<<"), *Task.TargetVersion);
 
     if (!PF.CopyFile(*RelJson, *CandidatePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to copy CandidateRelease to Releases directory"));
-        return 8;
-    }
+    { UE_LOG(LogTemp, Error, TEXT("Failed to copy CandidateRelease")); return 8; }
 
-    // 5. 记录 History
     if (Task.Options.bGenerateBuildReport)
     {
         FG01BuildReport Report;
         Report.TaskType = TEXT("PromoteToRelease");
         Report.Platform = Task.Platform;
+        Report.BasePackageVersion = InheritedBasePackageVersion;
         Report.BaseVersion = Task.PromoteFromPatchVersion;
         Report.TargetVersion = Task.TargetVersion;
         Report.BuildTime = BuildTimeStr;
@@ -411,6 +431,7 @@ int32 UG01HotPatchCommandlet::ExecutePromoteToRelease(
         Entry.BaseVersion = Task.TargetVersion;
         Entry.PatchType = TEXT("Release");
         Entry.Platform = Task.Platform;
+        Entry.BasePackageVersion = InheritedBasePackageVersion;  // 从源 Patch 继承
         Entry.BuildTime = BuildTimeStr;
         Entry.bSuccess = true;
         Entry.PromotedFromPatch = Task.PromoteFromPatchVersion;
@@ -420,8 +441,8 @@ int32 UG01HotPatchCommandlet::ExecutePromoteToRelease(
         Hist.SaveToFile(HistPath);
     }
 
-    UE_LOG(LogTemp, Display, TEXT("PROMOTE COMPLETE: %s is now an official Release (from Patch %s, %.1fs)"),
-        *Task.TargetVersion, *Task.PromoteFromPatchVersion, FPlatformTime::Seconds() - StartTime);
+    UE_LOG(LogTemp, Display, TEXT("PROMOTE COMPLETE: %s -> Release (BasePackage=%s, %.1fs)"),
+        *Task.TargetVersion, *InheritedBasePackageVersion, FPlatformTime::Seconds() - StartTime);
     return 0;
 }
 
@@ -436,7 +457,6 @@ bool UG01HotPatchCommandlet::ComputeFileMD5(const FString& FilePath, FString& Ou
     FMD5 MD5;
     TArray<uint8> Buf;
     Buf.SetNumUninitialized(BufSize);
-
     int64 Rem = Handle->Size();
     while (Rem > 0)
     {
@@ -445,12 +465,9 @@ bool UG01HotPatchCommandlet::ComputeFileMD5(const FString& FilePath, FString& Ou
         MD5.Update(Buf.GetData(), R);
         Rem -= R;
     }
-
-    uint8 Digest[16];
-    MD5.Final(Digest);
+    uint8 Digest[16]; MD5.Final(Digest);
     OutMD5.Empty();
-    for (int32 i = 0; i < 16; ++i)
-        OutMD5 += FString::Printf(TEXT("%02x"), Digest[i]);
+    for (int32 i = 0; i < 16; ++i) OutMD5 += FString::Printf(TEXT("%02x"), Digest[i]);
     return true;
 }
 

@@ -30,6 +30,7 @@ public class G01HotUpdateTool : ModuleRules
             "EditorStyle",
             "UnrealEd",
             "WorkspaceMenuStructure",
+            "ApplicationCore",
         });
     }
 }
