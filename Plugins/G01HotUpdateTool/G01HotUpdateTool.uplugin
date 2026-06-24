@@ -1,0 +1,25 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "0.1.0",
+    "FriendlyName": "G01 HotUpdate Tool",
+    "Description": "G01 project hot update build tool - wraps HotPatcher with automated workflow",
+    "Category": "Project",
+    "CreatedBy": "G01 Team",
+    "CanContainContent": false,
+    "IsBetaVersion": true,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "G01HotUpdateTool",
+            "Type": "Editor",
+            "LoadingPhase": "Default"
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "HotPatcher",
+            "Enabled": true
+        }
+    ]
+}

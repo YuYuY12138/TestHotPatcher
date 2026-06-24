@@ -1,0 +1,18 @@
+{
+    "taskType": "Patch",
+    "platform": "Android",
+    "patchType": "Snapshot",
+    "baseVersion": "1.0.0",
+    "targetVersion": "1.0.1",
+    "releaseConfigTemplate": "ReleaseTest.json",
+    "patchConfigTemplate": "PatchTest.json",
+    "outputDir": "Saved/HotPatcher",
+    "options": {
+        "bCookPatchAssets": true,
+        "bCompressPak": true,
+        "bStandaloneMode": false,
+        "bCalculateMD5": true,
+        "bGenerateManifest": true,
+        "bGenerateBuildReport": true
+    }
+}

@@ -1,0 +1,7 @@
+{
+    "taskType": "ExportRelease",
+    "platform": "Android",
+    "baseVersion": "1.0.0",
+    "releaseConfigTemplate": "ReleaseTest.json",
+    "outputDir": "Saved/HotPatcher"
+}

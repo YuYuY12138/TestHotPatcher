@@ -17,6 +17,10 @@
 			"TargetAllowList": [
 				"Editor"
 			]
+		},
+		{
+			"Name": "G01HotUpdateTool",
+			"Enabled": true
 		}
 	]
 }
