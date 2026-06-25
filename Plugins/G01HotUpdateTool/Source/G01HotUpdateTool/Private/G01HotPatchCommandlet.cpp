@@ -8,6 +8,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "Serialization/JsonSerializer.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 
 static bool IsRelPath(const FString& P)
 {
@@ -35,6 +36,16 @@ int32 UG01HotPatchCommandlet::Main(const FString& Params)
     UE_LOG(LogTemp, Display, TEXT("============================================"));
     UE_LOG(LogTemp, Display, TEXT(" G01 HotPatch Commandlet"));
     UE_LOG(LogTemp, Display, TEXT("============================================"));
+
+    // Commandlet 进程的 AssetRegistry 默认不完整，必须先全量扫描
+    // 否则依赖追踪只能发现直接引用，无法递归追踪完整依赖闭包
+    if (IsRunningCommandlet())
+    {
+        UE_LOG(LogTemp, Display, TEXT("Loading AssetRegistry (SearchAllAssets)..."));
+        FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+        AssetRegistryModule.Get().SearchAllAssets(true);
+        UE_LOG(LogTemp, Display, TEXT("AssetRegistry ready."));
+    }
 
     double StartTime = FPlatformTime::Seconds();
     FString BuildTimeStr = GetCurrentTimeISO8601();

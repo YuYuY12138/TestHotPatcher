@@ -50,10 +50,28 @@ bool FG01HotPatcherAdapter::ExportRelease(
         return false;
     }
 
-    // 只覆盖必要字段，其余来自模板
     Settings.VersionId = Version;
     Settings.SavePath.Path = OutputDir;
     Settings.bStandaloneMode = false;
+
+    // byPakList 模式：替换 PakFiles/PakResponseFiles 路径中的 [PROJECTDIR]
+    if (Settings.IsByPakList())
+    {
+        for (FPlatformPakListFiles& PlatPak : Settings.PlatformsPakListFiles)
+        {
+            for (FFilePath& PakFile : PlatPak.PakFiles)
+            {
+                PakFile.FilePath = ResolvePath(PakFile.FilePath);
+                UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] PakFile: %s"), *PakFile.FilePath);
+            }
+            for (FFilePath& RespFile : PlatPak.PakResponseFiles)
+            {
+                RespFile.FilePath = ResolvePath(RespFile.FilePath);
+                UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] PakResponseFile: %s"), *RespFile.FilePath);
+            }
+        }
+        UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] byPakList=true, %d platform(s)"), Settings.PlatformsPakListFiles.Num());
+    }
 
     FString FinalJson;
     THotPatcherTemplateHelper::TSerializeStructAsJsonString(Settings, FinalJson);
@@ -128,7 +146,6 @@ bool FG01HotPatcherAdapter::BuildPatch(
         return false;
     }
 
-    // 只覆盖必要字段，其余来自模板
     Settings.VersionId = TargetVersion;
     Settings.bByBaseVersion = true;
     Settings.BaseVersion.FilePath = ResolvedBaseRelease;
@@ -146,14 +163,12 @@ bool FG01HotPatcherAdapter::BuildPatch(
     Settings.PakTargetPlatforms.Empty();
     Settings.PakTargetPlatforms.Add(static_cast<ETargetPlatform>(PlatformEnumValue));
 
-    // Dump 最终 Settings（执行前）
     FString FinalJson;
     THotPatcherTemplateHelper::TSerializeStructAsJsonString(Settings, FinalJson);
     FString DumpPath = FPaths::Combine(OutputDir, FString::Printf(TEXT("Dump_FinalPatchConfig_%s.json"), *TargetVersion));
     DumpSettingsToFile(DumpPath, FinalJson);
     UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] FinalConfigDump: %s"), *DumpPath);
 
-    // 关键字段快照
     UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] --- Key Settings ---"));
     UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] VersionId:           %s"), *Settings.VersionId);
     UE_LOG(LogTemp, Log, TEXT("[Adapter][DIAG] bByBaseVersion:      %s"), Settings.bByBaseVersion ? TEXT("true") : TEXT("false"));

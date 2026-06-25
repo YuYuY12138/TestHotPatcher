@@ -574,7 +574,7 @@ void SG01HotUpdatePanel::ExecuteBuild()
 
     // 日志路径
     FString TimeStr = FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"));
-    CurrentLogPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher"),
+    CurrentLogPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher/Logs"),
         FString::Printf(TEXT("HotPatch_%s.log"), *TimeStr));
 
     FString UECmd = FPaths::Combine(FPaths::EngineDir(), TEXT("Binaries/Win64/UnrealEditor-Cmd.exe"));
@@ -703,7 +703,7 @@ FReply SG01HotUpdatePanel::OnOpenLogFileClicked()
     if (!CurrentLogPath.IsEmpty() && FPlatformFileManager::Get().GetPlatformFile().FileExists(*CurrentLogPath))
         FPlatformProcess::LaunchFileInDefaultExternalApplication(*CurrentLogPath);
     else
-        FPlatformProcess::ExploreFolder(*FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher")));
+        FPlatformProcess::ExploreFolder(*FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HotPatcher/Logs")));
     return FReply::Handled();
 }
 
