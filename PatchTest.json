@@ -1,20 +1,16 @@
 {
 	"bByBaseVersion": true,
-	"baseVersion":
-	{
+	"baseVersion": {
 		"filePath": ""
 	},
 	"versionId": "",
 	"bImportProjectSettings": false,
 	"bBinariesPatch": false,
-	"binariesPatchConfig":
-	{
+	"binariesPatchConfig": {
 		"binariesPatchType": "None",
-		"encryptSettings":
-		{
+		"encryptSettings": {
 			"bUseDefaultCryptoIni": false,
-			"cryptoKeys":
-			{
+			"cryptoKeys": {
 				"filePath": ""
 			}
 		},
@@ -48,26 +44,22 @@
 	"bCreateDefaultChunk": false,
 	"chunkInfos": [],
 	"bCookPatchAssets": true,
-	"cookAdvancedOptions":
-	{
+	"cookAdvancedOptions": {
 		"bCookParallelSerialize": false,
 		"numberOfAssetsPerFrame": 100,
-		"overrideNumberOfAssetsPerFrame":
-		{
+		"overrideNumberOfAssetsPerFrame": {
 			"/Script/CoreUObject.Class'/Script/Engine.World'": 2
 		},
 		"bAccompanyCookForShader": false
 	},
-	"cookShaderOptions":
-	{
+	"cookShaderOptions": {
 		"bSharedShaderLibrary": false,
 		"bNativeShader": true,
 		"shaderNameRule": "CHUNK_NAME",
 		"customShaderName": "",
 		"shaderLibMountPointRegular": "[PROJECTDIR]/ShaderLibs"
 	},
-	"serializeAssetRegistryOptions":
-	{
+	"serializeAssetRegistryOptions": {
 		"bSerializeAssetRegistry": false,
 		"bSerializeAssetRegistryManifest": false,
 		"assetRegistryMountPointRegular": "[PROJECTDIR]/AssetRegistry",
@@ -75,20 +67,16 @@
 		"bCustomAssetRegistryName": false,
 		"assetRegistryNameRegular": "[CHUNK_NAME]_AssetRegistry.bin"
 	},
-	"ioStoreSettings":
-	{
+	"ioStoreSettings": {
 		"bIoStore": false,
 		"bAllowBulkDataInIoStore": false,
 		"ioStorePakListOptions": [],
 		"ioStoreCommandletOptions": [],
-		"platformContainers":
-		{
-		},
+		"platformContainers": {},
 		"bStoragePakList": true,
 		"bStorageBulkDataInfo": true
 	},
-	"unrealPakSettings":
-	{
+	"unrealPakSettings": {
 		"unrealPakListOptions": [],
 		"unrealCommandletOptions": [],
 		"bStoragePakList": true
@@ -100,11 +88,9 @@
 		"-compress",
 		"-compressionformats=Zlib"
 	],
-	"encryptSettings":
-	{
+	"encryptSettings": {
 		"bUseDefaultCryptoIni": false,
-		"cryptoKeys":
-		{
+		"cryptoKeys": {
 			"filePath": ""
 		}
 	},
@@ -124,8 +110,7 @@
 	"bStorageUnrealPakList": true,
 	"bEnableProfiling": false,
 	"storageCookedDir": "[PROJECTDIR]/Saved/HotPatcher/Cooked",
-	"assetScanConfig":
-	{
+	"assetScanConfig": {
 		"bPackageTracker": true,
 		"assetIncludeFilters": [
 			{
@@ -143,20 +128,12 @@
 		"bAnalysisMaterialInstance": true,
 		"bSupportWorldComposition": false,
 		"bForceSkipContent": true,
-		"forceSkipContentRules": [
-			{
-				"path": "/Game/__ExternalActors__"
-			},
-			{
-				"path": "/Game/__ExternalObjects__"
-			}
-		],
+		"forceSkipContentRules": [],
 		"forceSkipAssets": [],
 		"forceSkipClasses": []
 	},
 	"bStorageConfig": true,
-	"savePath":
-	{
+	"savePath": {
 		"path": "[PROJECTDIR]/Saved/HotPatcher/"
 	},
 	"hashCalculator": "MD5",

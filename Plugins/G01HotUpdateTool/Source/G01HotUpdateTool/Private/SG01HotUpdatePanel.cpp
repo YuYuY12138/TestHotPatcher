@@ -37,6 +37,12 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
 {
     RefreshHistory();
 
+    if (InputPakPath.IsEmpty())
+    {
+        InputPakPath = FPaths::Combine(FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()),
+            TEXT("Saved/StagedBuilds/Android_ASTC/TestHotpatch/Content/Paks/TestHotpatch-Android_ASTC.pak"));
+    }
+
     ChildSlot
     [
         SNew(SScrollBox)
@@ -67,17 +73,33 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                     const FG01BasePackageInfo* BP = History.GetActiveBasePackage();
                     FString ActivePkg = TEXT("(none)");
                     FString LinkedRel = TEXT("-");
-                    if (BP) { ActivePkg = BP->PackageVersion; LinkedRel = BP->LinkedReleaseVersion; }
+                    FString PakFile = TEXT("-");
+                    FString Md5 = TEXT("-");
+                    FString BpTime = TEXT("-");
+                    if (BP)
+                    {
+                        ActivePkg = BP->PackageVersion;
+                        LinkedRel = BP->LinkedReleaseVersion;
+                        PakFile = BP->PackagePath.IsEmpty() ? TEXT("-") : FPaths::GetCleanFilename(BP->PackagePath);
+                        Md5 = BP->PakMD5.IsEmpty() ? TEXT("-") : BP->PakMD5.Left(16) + TEXT("...");
+                        BpTime = FormatBuildTime(BP->BuildTime);
+                    }
                     else
                     {
                         for (const FG01BuildHistoryEntry& E : History.Entries)
+                        {
                             if (E.PatchType == TEXT("Release") && !E.BasePackageVersion.IsEmpty())
-                            { ActivePkg = E.BasePackageVersion; LinkedRel = E.TargetVersion; break; }
+                            {
+                                ActivePkg = E.BasePackageVersion;
+                                LinkedRel = E.TargetVersion;
+                                break;
+                            }
+                        }
                     }
                     FString LatestRes = History.LatestPatchVersion.IsEmpty() ? History.LatestReleaseVersion : History.LatestPatchVersion;
                     return FText::FromString(FString::Printf(TEXT(
-                        "Active Base Package:  %s\nLinked Base Release:  %s\nLatest Resource Ver:  %s"),
-                        *ActivePkg, *LinkedRel, LatestRes.IsEmpty() ? TEXT("-") : *LatestRes));
+                        "Active Base Package:  %s\nPlatform:             Android\nPak File:             %s\nPak MD5:              %s\nBuild Time:           %s\nLinked Release:       %s\nLatest Resource Ver:  %s"),
+                        *ActivePkg, *PakFile, *Md5, *BpTime, *LinkedRel, LatestRes.IsEmpty() ? TEXT("-") : *LatestRes));
                 })
             ]
         ]
@@ -92,7 +114,7 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             [ SNew(STextBlock).Text(LOCTEXT("RelH", "Releases")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
             + SVerticalBox::Slot().AutoHeight().MaxHeight(120)
             [
-                SNew(SListView<TSharedPtr<FG01BuildHistoryEntry>>)
+                SAssignNew(ReleaseListView, SListView<TSharedPtr<FG01BuildHistoryEntry>>)
                 .ListItemsSource(&ReleaseRows)
                 .OnGenerateRow(this, &SG01HotUpdatePanel::MakeReleaseRow)
                 .HeaderRow(
@@ -114,7 +136,7 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             [ SNew(STextBlock).Text(LOCTEXT("PaH", "Patches")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12)) ]
             + SVerticalBox::Slot().AutoHeight().MaxHeight(200)
             [
-                SNew(SListView<TSharedPtr<FG01BuildHistoryEntry>>)
+                SAssignNew(PatchListView, SListView<TSharedPtr<FG01BuildHistoryEntry>>)
                 .ListItemsSource(&PatchRows)
                 .OnGenerateRow(this, &SG01HotUpdatePanel::MakePatchRow)
                 .HeaderRow(
@@ -169,6 +191,28 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                     .OnTextCommitted_Lambda([this](const FText& T, ETextCommit::Type) { InputBasePackageVersion = T.ToString(); bShowSummary = false; })
                 ]
             ]
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0)
+            [
+                SNew(STextBlock)
+                .Visibility_Lambda([this]() {
+                    const FG01BasePackageInfo* BP = History.GetActiveBasePackage();
+                    if (BP && !BP->PackageVersion.IsEmpty() && !InputBasePackageVersion.IsEmpty() && BP->PackageVersion != InputBasePackageVersion)
+                    {
+                        return EVisibility::Visible;
+                    }
+                    return EVisibility::Collapsed;
+                })
+                .Text_Lambda([this]() {
+                    const FG01BasePackageInfo* BP = History.GetActiveBasePackage();
+                    if (BP)
+                    {
+                        return FText::FromString(FString::Printf(TEXT("Warning: Active BasePackage is %s, you entered %s"), *BP->PackageVersion, *InputBasePackageVersion));
+                    }
+                    return FText::GetEmpty();
+                })
+                .ColorAndOpacity(FLinearColor::Yellow)
+                .AutoWrapText(true)
+            ]
 
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
@@ -181,6 +225,19 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                     .Text_Lambda([this]() { return FText::FromString(InputReleaseVersion); })
                     .HintText(LOCTEXT("RvH", "e.g. 1.0.0"))
                     .OnTextCommitted_Lambda([this](const FText& T, ETextCommit::Type) { InputReleaseVersion = T.ToString(); bShowSummary = false; })
+                ]
+            ]
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
+            [
+                SNew(SHorizontalBox)
+                .Visibility_Lambda([this]() { return ActionIndex == 0 ? EVisibility::Visible : EVisibility::Collapsed; })
+                + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("PkL", "Pak Path:")) ]
+                + SHorizontalBox::Slot().FillWidth(0.7f)
+                [
+                    SNew(SEditableTextBox)
+                    .Text_Lambda([this]() { return FText::FromString(InputPakPath); })
+                    .HintText(LOCTEXT("PkH", "Path to base package .pak file"))
+                    .OnTextCommitted_Lambda([this](const FText& T, ETextCommit::Type) { InputPakPath = T.ToString(); bShowSummary = false; })
                 ]
             ]
 
@@ -291,6 +348,12 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                 [ SNew(SButton).Text(LOCTEXT("CpyErr", "Copy Errors")).OnClicked(this, &SG01HotUpdatePanel::OnCopyErrorClicked) ]
                 + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
                 [ SNew(SButton).Text(LOCTEXT("OpD", "Open Output Dir")).OnClicked(this, &SG01HotUpdatePanel::OnOpenDirClicked) ]
+                + SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+                [
+                    SNew(SButton).Text(LOCTEXT("Abort", "Abort Build"))
+                    .IsEnabled_Lambda([this]() { return bIsBuilding; })
+                    .OnClicked(this, &SG01HotUpdatePanel::OnAbortClicked)
+                ]
             ]
 
             // 结果摘要（成功/失败/错误提示）
@@ -460,6 +523,15 @@ void SG01HotUpdatePanel::RefreshHistory()
             InputTargetVersion = Latest.Left(Dot + 1) + FString::FromInt(Num);
         }
     }
+
+    if (ReleaseListView.IsValid())
+    {
+        ReleaseListView->RequestListRefresh();
+    }
+    if (PatchListView.IsValid())
+    {
+        PatchListView->RequestListRefresh();
+    }
 }
 
 FString SG01HotUpdatePanel::GetOutputRoot() const
@@ -489,9 +561,9 @@ void SG01HotUpdatePanel::GenerateSummary()
     if (ActionIndex == 0)
     {
         SummaryText = FString::Printf(TEXT(
-            "Action:          Export Release\nPlatform:        Android\nBase Package:    %s\nRelease Version: %s\n\n"
+            "Action:          Export Release\nPlatform:        Android\nBase Package:    %s\nRelease Version: %s\nPak Path:        %s\n\n"
             "WARNING: Confirm workspace content corresponds to %s."),
-            *InputBasePackageVersion, *InputReleaseVersion, *InputReleaseVersion);
+            *InputBasePackageVersion, *InputReleaseVersion, *InputPakPath, *InputReleaseVersion);
         if (InputReleaseVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Release Version empty")); bValidationPassed = false; }
         else
         {
@@ -499,6 +571,20 @@ void SG01HotUpdatePanel::GenerateSummary()
             FString RelPath = FPaths::Combine(GetOutputRoot(), TEXT("Releases"), InputReleaseVersion, InputReleaseVersion, InputReleaseVersion + TEXT("_Release.json"));
             if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*RelPath))
             { Checks.Add(TEXT("[FAIL] Release already exists")); bValidationPassed = false; }
+        }
+        if (InputPakPath.IsEmpty())
+        {
+            Checks.Add(TEXT("[FAIL] Pak Path empty"));
+            bValidationPassed = false;
+        }
+        else if (!FPlatformFileManager::Get().GetPlatformFile().FileExists(*InputPakPath))
+        {
+            Checks.Add(FString::Printf(TEXT("[FAIL] Pak file not found: %s"), *FPaths::GetCleanFilename(InputPakPath)));
+            bValidationPassed = false;
+        }
+        else
+        {
+            Checks.Add(FString::Printf(TEXT("[OK] Pak exists: %s"), *FPaths::GetCleanFilename(InputPakPath)));
         }
     }
     else if (ActionIndex == 1)
@@ -554,6 +640,7 @@ void SG01HotUpdatePanel::ExecuteBuild()
     {
         Task.TaskType = TEXT("ExportRelease");
         Task.BaseVersion = InputReleaseVersion;
+        Task.PakPath = InputPakPath;
     }
     else if (ActionIndex == 1)
     {
@@ -724,6 +811,16 @@ FReply SG01HotUpdatePanel::OnCopyErrorClicked()
 FReply SG01HotUpdatePanel::OnOpenDirClicked()
 {
     FPlatformProcess::ExploreFolder(*GetOutputRoot());
+    return FReply::Handled();
+}
+
+FReply SG01HotUpdatePanel::OnAbortClicked()
+{
+    if (BuildProcHandle.IsValid())
+    {
+        FPlatformProcess::TerminateProc(BuildProcHandle, true);
+        AppendLog(TEXT("\n=== Build ABORTED by user ===\n"));
+    }
     return FReply::Handled();
 }
 

@@ -118,6 +118,48 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         return 5;
     }
 
+    // 解析基础包 pak 路径（面板传入或使用默认路径）
+    FString PakPath = Task.PakPath;
+    if (PakPath.IsEmpty())
+    {
+        PakPath = FPaths::Combine(ProjectDir, TEXT("Saved/StagedBuilds/Android_ASTC/TestHotpatch/Content/Paks/TestHotpatch-Android_ASTC.pak"));
+    }
+    else
+    {
+        PakPath = ToAbs(PakPath, ProjectDir);
+    }
+
+    // 校验 pak 文件存在
+    if (!PF.FileExists(*PakPath))
+    {
+        UE_LOG(LogTemp, Error, TEXT("============================================"));
+        UE_LOG(LogTemp, Error, TEXT(" BASE PACKAGE PAK NOT FOUND"));
+        UE_LOG(LogTemp, Error, TEXT("  Path: %s"), *PakPath);
+        UE_LOG(LogTemp, Error, TEXT("  Build Android package first before ExportRelease."));
+        UE_LOG(LogTemp, Error, TEXT("============================================"));
+        return 10;
+    }
+
+    // 计算 pak MD5
+    FString PakMD5;
+    ComputeFileMD5(PakPath, PakMD5);
+    UE_LOG(LogTemp, Display, TEXT("BasePackage Pak: %s"), *PakPath);
+    UE_LOG(LogTemp, Display, TEXT("BasePackage MD5: %s"), *PakMD5);
+
+    // 如果 History 里已注册同版本 BasePackage 且 MD5 不同，Warning
+    FG01BuildHistory Hist;
+    Hist.LoadFromFile(HistPath);
+    for (const FG01BasePackageInfo& ExBP : Hist.BasePackages)
+    {
+        if (ExBP.PackageVersion == Task.BasePackageVersion && !ExBP.PakMD5.IsEmpty() && ExBP.PakMD5 != PakMD5)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Pak file has changed since last registration (MD5 mismatch)"));
+            UE_LOG(LogTemp, Warning, TEXT("  Previous: %s"), *ExBP.PakMD5);
+            UE_LOG(LogTemp, Warning, TEXT("  Current:  %s"), *PakMD5);
+            break;
+        }
+    }
+
     UE_LOG(LogTemp, Display, TEXT("Exporting Release %s (BasePackage=%s) ..."), *Task.BaseVersion, *Task.BasePackageVersion);
     UE_LOG(LogTemp, Warning, TEXT(">>> Confirm: workspace must be at %s state <<<"), *Task.BaseVersion);
 
@@ -127,7 +169,11 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         ToAbs(Task.ReleaseConfigTemplate, ProjectDir),
         ReleasesDir, Err);
 
-    if (!bOk) { UE_LOG(LogTemp, Error, TEXT("ExportRelease FAILED: %s"), *Err); return 2; }
+    if (!bOk)
+    {
+        UE_LOG(LogTemp, Error, TEXT("ExportRelease FAILED: %s"), *Err);
+        return 2;
+    }
 
     if (Task.Options.bGenerateBuildReport)
     {
@@ -142,7 +188,6 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         Report.bSuccess = true;
         Report.SaveToFile(FPaths::Combine(ReleasesDir, FString::Printf(TEXT("BuildReport_%s.json"), *Task.BaseVersion)));
 
-        FG01BuildHistory Hist; Hist.LoadFromFile(HistPath);
         FG01BuildHistoryEntry Entry;
         Entry.TargetVersion = Task.BaseVersion;
         Entry.BaseVersion = Task.BaseVersion;
@@ -154,11 +199,12 @@ int32 UG01HotPatchCommandlet::ExecuteExportRelease(
         Entry.ReportPath = FString::Printf(TEXT("Releases/%s/BuildReport_%s.json"), *Task.BaseVersion, *Task.BaseVersion);
         Hist.AddEntry(Entry);
 
-        // 注册 BasePackage（首次 ExportRelease 时自动注册为 active base package）
         FG01BasePackageInfo BP;
         BP.PackageVersion = Task.BasePackageVersion;
         BP.Platform = Task.Platform;
         BP.LinkedReleaseVersion = Task.BaseVersion;
+        BP.PackagePath = PakPath;
+        BP.PakMD5 = PakMD5;
         BP.BuildTime = BuildTimeStr;
         BP.bIsActiveBase = true;
         Hist.RegisterBasePackage(BP);

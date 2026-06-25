@@ -83,6 +83,10 @@ struct FG01BuildTask
     UPROPERTY()
     FString OutputDir = TEXT("Saved/HotPatcher");
 
+    /** 基础包 pak 文件路径（ExportRelease 时用于校验和注册） */
+    UPROPERTY()
+    FString PakPath;
+
     UPROPERTY()
     FG01BuildTaskOptions Options;
 

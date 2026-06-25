@@ -23,8 +23,7 @@
 	"bBackupProjectConfig": false,
 	"backupMetadataPlatforms": [],
 	"bNoShaderCompile": true,
-	"assetScanConfig":
-	{
+	"assetScanConfig": {
 		"bPackageTracker": true,
 		"assetIncludeFilters": [
 			{
@@ -42,20 +41,12 @@
 		"bAnalysisMaterialInstance": true,
 		"bSupportWorldComposition": false,
 		"bForceSkipContent": true,
-		"forceSkipContentRules": [
-			{
-				"path": "/Game/__ExternalActors__"
-			},
-			{
-				"path": "/Game/__ExternalObjects__"
-			}
-		],
+		"forceSkipContentRules": [],
 		"forceSkipAssets": [],
 		"forceSkipClasses": []
 	},
 	"bStorageConfig": true,
-	"savePath":
-	{
+	"savePath": {
 		"path": "[PROJECTDIR]/Saved/HotPatcher/"
 	},
 	"hashCalculator": "MD5",

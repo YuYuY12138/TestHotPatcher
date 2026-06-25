@@ -24,6 +24,7 @@ private:
     int32 ActionIndex = 0;
     FString InputBasePackageVersion;
     FString InputReleaseVersion;
+    FString InputPakPath;
     FString SelectedBaseVersion;
     FString InputTargetVersion;
     FString SelectedPromotePatchVersion;
@@ -56,6 +57,8 @@ private:
     // ---- 表格数据 ----
     TArray<TSharedPtr<FG01BuildHistoryEntry>> ReleaseRows;
     TArray<TSharedPtr<FG01BuildHistoryEntry>> PatchRows;
+    TSharedPtr<SListView<TSharedPtr<FG01BuildHistoryEntry>>> ReleaseListView;
+    TSharedPtr<SListView<TSharedPtr<FG01BuildHistoryEntry>>> PatchListView;
 
     void RefreshHistory();
     FString GetOutputRoot() const;
@@ -75,4 +78,5 @@ private:
     FReply OnClearLogClicked();
     FReply OnOpenLogFileClicked();
     FReply OnCopyErrorClicked();
+    FReply OnAbortClicked();
 };

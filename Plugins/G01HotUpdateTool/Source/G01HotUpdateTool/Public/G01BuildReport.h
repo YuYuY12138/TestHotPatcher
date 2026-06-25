@@ -98,9 +98,13 @@ struct FG01BasePackageInfo
     UPROPERTY()
     FString LinkedReleaseVersion;
 
-    /** APK 路径（当前阶段可为空，预留） */
+    /** APK 路径（当前阶段存 Pak 文件绝对路径） */
     UPROPERTY()
     FString PackagePath;
+
+    /** Pak 文件 MD5，用于校验基础包一致性 */
+    UPROPERTY()
+    FString PakMD5;
 
     UPROPERTY()
     FString BuildTime;
