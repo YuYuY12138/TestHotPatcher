@@ -94,9 +94,8 @@ TArray<FString> FG01BuildTask::Validate() const
         if (TargetVersion.IsEmpty()) Errors.Add(TEXT("targetVersion required"));
         if (PatchConfigTemplate.IsEmpty()) Errors.Add(TEXT("patchConfigTemplate required"));
         if (ReleaseConfigTemplate.IsEmpty()) Errors.Add(TEXT("releaseConfigTemplate required"));
-        if (PatchType != TEXT("Snapshot") && PatchType != TEXT("Incremental") && PatchType != TEXT("Merged"))
-            Errors.Add(FString::Printf(TEXT("Invalid patchType: '%s'"), *PatchType));
-        if (PatchType == TEXT("Incremental")) Errors.Add(TEXT("Incremental not supported in MVP"));
+        if (PatchType != TEXT("Incremental") && PatchType != TEXT("Consolidated"))
+            Errors.Add(FString::Printf(TEXT("Invalid patchType: '%s' (use Incremental or Consolidated)"), *PatchType));
         if (BaseVersion == TargetVersion) Errors.Add(TEXT("baseVersion and targetVersion must differ"));
     }
 

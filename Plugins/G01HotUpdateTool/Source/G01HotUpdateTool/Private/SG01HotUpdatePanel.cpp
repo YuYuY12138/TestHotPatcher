@@ -29,8 +29,13 @@ static FString FormatBuildTime(const FString& IsoUtc)
 
 static TArray<TSharedPtr<FString>> GActions = {
     MakeShareable(new FString(TEXT("Export Release"))),
-    MakeShareable(new FString(TEXT("Build Snapshot Patch"))),
+    MakeShareable(new FString(TEXT("Build Patch"))),
     MakeShareable(new FString(TEXT("Promote to Release"))),
+};
+
+static TArray<TSharedPtr<FString>> GPatchTypes = {
+    MakeShareable(new FString(TEXT("Incremental"))),
+    MakeShareable(new FString(TEXT("Consolidated"))),
 };
 
 void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
@@ -165,23 +170,6 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
                 SNew(SHorizontalBox)
-                + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("AcL", "Action:")) ]
-                + SHorizontalBox::Slot().FillWidth(0.7f)
-                [
-                    SNew(SComboBox<TSharedPtr<FString>>)
-                    .OptionsSource(&GActions)
-                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) {
-                        ActionIndex = GActions.IndexOfByPredicate([&](const TSharedPtr<FString>& S) { return *S == *V; });
-                        bShowSummary = false;
-                    })
-                    .OnGenerateWidget_Lambda([](TSharedPtr<FString> I) { return SNew(STextBlock).Text(FText::FromString(*I)); })
-                    [ SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(*GActions[ActionIndex]); }) ]
-                ]
-            ]
-
-            + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
-            [
-                SNew(SHorizontalBox)
                 + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("BpvL", "Base Package Ver:")) ]
                 + SHorizontalBox::Slot().FillWidth(0.7f)
                 [
@@ -217,6 +205,23 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
             [
                 SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("AcL", "Action:")) ]
+                + SHorizontalBox::Slot().FillWidth(0.7f)
+                [
+                    SNew(SComboBox<TSharedPtr<FString>>)
+                    .OptionsSource(&GActions)
+                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) {
+                        ActionIndex = GActions.IndexOfByPredicate([&](const TSharedPtr<FString>& S) { return *S == *V; });
+                        bShowSummary = false;
+                    })
+                    .OnGenerateWidget_Lambda([](TSharedPtr<FString> I) { return SNew(STextBlock).Text(FText::FromString(*I)); })
+                    [ SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(*GActions[ActionIndex]); }) ]
+                ]
+            ]
+
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
+            [
+                SNew(SHorizontalBox)
                 .Visibility_Lambda([this]() { return ActionIndex == 0 ? EVisibility::Visible : EVisibility::Collapsed; })
                 + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("RvL", "Release Version:")) ]
                 + SHorizontalBox::Slot().FillWidth(0.7f)
@@ -238,6 +243,27 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
                     .Text_Lambda([this]() { return FText::FromString(InputPakPath); })
                     .HintText(LOCTEXT("PkH", "Path to base package .pak file"))
                     .OnTextCommitted_Lambda([this](const FText& T, ETextCommit::Type) { InputPakPath = T.ToString(); bShowSummary = false; })
+                ]
+            ]
+
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 4)
+            [
+                SNew(SHorizontalBox)
+                .Visibility_Lambda([this]() { return ActionIndex == 1 ? EVisibility::Visible : EVisibility::Collapsed; })
+                + SHorizontalBox::Slot().FillWidth(0.3f) [ SNew(STextBlock).Text(LOCTEXT("PtL", "Patch Type:")) ]
+                + SHorizontalBox::Slot().FillWidth(0.7f)
+                [
+                    SNew(SComboBox<TSharedPtr<FString>>)
+                    .OptionsSource(&GPatchTypes)
+                    .OnSelectionChanged_Lambda([this](TSharedPtr<FString> V, ESelectInfo::Type) {
+                        if (V.IsValid())
+                        {
+                            PatchTypeIndex = GPatchTypes.IndexOfByPredicate([&](const TSharedPtr<FString>& S) { return *S == *V; });
+                            bShowSummary = false;
+                        }
+                    })
+                    .OnGenerateWidget_Lambda([](TSharedPtr<FString> I) { return SNew(STextBlock).Text(FText::FromString(*I)); })
+                    [ SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(*GPatchTypes[PatchTypeIndex]); }) ]
                 ]
             ]
 
@@ -361,6 +387,13 @@ void SG01HotUpdatePanel::Construct(const FArguments& InArgs)
             [
                 SNew(STextBlock)
                 .Text_Lambda([this]() { return FText::FromString(ResultSummary); })
+                .Font_Lambda([this]() {
+                    if (ResultSummary.Contains(TEXT("COMPLETE")))
+                    {
+                        return FCoreStyle::GetDefaultFontStyle("Bold", 28);
+                    }
+                    return FCoreStyle::GetDefaultFontStyle("Regular", 10);
+                })
                 .ColorAndOpacity_Lambda([this]() {
                     if (ResultSummary.Contains(TEXT("COMPLETE"))) return FSlateColor(FLinearColor::Green);
                     if (ResultSummary.Contains(TEXT("FAILED")) || ResultSummary.Contains(TEXT("ERROR"))) return FSlateColor(FLinearColor::Red);
@@ -589,20 +622,43 @@ void SG01HotUpdatePanel::GenerateSummary()
     }
     else if (ActionIndex == 1)
     {
+        FString PtName = *GPatchTypes[PatchTypeIndex];
         SummaryText = FString::Printf(TEXT(
-            "Action:        Build Snapshot Patch\nPlatform:      Android\nBase Package:  %s\nBase Release:  %s\nTarget:        %s\n\n"
-            "WARNING: Confirm workspace includes all %s changes."),
-            *InputBasePackageVersion, *SelectedBaseVersion, *InputTargetVersion, *InputTargetVersion);
+            "Action:        Build %s Patch\nPlatform:      Android\nBase Package:  %s\nBase Release:  %s\nTarget:        %s"),
+            *PtName, *InputBasePackageVersion, *SelectedBaseVersion, *InputTargetVersion);
+
+        if (PatchTypeIndex == 1)
+        {
+            TArray<FString> Contained;
+            for (const FG01BuildHistoryEntry& E : History.Entries)
+            {
+                if (E.PatchType != TEXT("Release") && E.bSuccess && E.BasePackageVersion == InputBasePackageVersion)
+                {
+                    Contained.Add(E.TargetVersion);
+                }
+            }
+            Contained.Add(InputTargetVersion);
+            SummaryText += TEXT("\nContains:      ") + FString::Join(Contained, TEXT(", "));
+        }
+
+        SummaryText += FString::Printf(TEXT("\n\nWARNING: Confirm workspace includes all %s changes."), *InputTargetVersion);
+
         if (SelectedBaseVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Base Version not selected")); bValidationPassed = false; }
         if (InputTargetVersion.IsEmpty()) { Checks.Add(TEXT("[FAIL] Target Version empty")); bValidationPassed = false; }
         else if (InputTargetVersion == SelectedBaseVersion) { Checks.Add(TEXT("[FAIL] Target must differ from Base")); bValidationPassed = false; }
         else
         {
-            Checks.Add(FString::Printf(TEXT("[OK] %s -> %s"), *SelectedBaseVersion, *InputTargetVersion));
+            Checks.Add(FString::Printf(TEXT("[OK] %s -> %s (%s)"), *SelectedBaseVersion, *InputTargetVersion, *PtName));
             FString RelPath = FPaths::Combine(GetOutputRoot(), TEXT("Releases"), SelectedBaseVersion, SelectedBaseVersion, SelectedBaseVersion + TEXT("_Release.json"));
             if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*RelPath))
+            {
                 Checks.Add(TEXT("[OK] Base Release exists"));
-            else { Checks.Add(TEXT("[FAIL] Base Release not found")); bValidationPassed = false; }
+            }
+            else
+            {
+                Checks.Add(TEXT("[FAIL] Base Release not found"));
+                bValidationPassed = false;
+            }
         }
     }
     else if (ActionIndex == 2)
@@ -647,7 +703,7 @@ void SG01HotUpdatePanel::ExecuteBuild()
         Task.TaskType = TEXT("BuildPatch");
         Task.BaseVersion = SelectedBaseVersion;
         Task.TargetVersion = InputTargetVersion;
-        Task.PatchType = TEXT("Snapshot");
+        Task.PatchType = PatchTypeIndex == 0 ? TEXT("Incremental") : TEXT("Consolidated");
     }
     else if (ActionIndex == 2)
     {
@@ -716,7 +772,9 @@ void SG01HotUpdatePanel::OnBuildComplete(int32 ReturnCode)
             ResultSummary += FString::Printf(TEXT("\nVersion: %s  BasePackage: %s  Type: %s"),
                 *L.TargetVersion, *L.BasePackageVersion, *L.PatchType);
             if (L.TotalPakSize > 0)
+            {
                 ResultSummary += FString::Printf(TEXT("  Size: %.1f MB"), L.TotalPakSize / (1024.0 * 1024.0));
+            }
         }
     }
     else if (bBuildHasErrors)

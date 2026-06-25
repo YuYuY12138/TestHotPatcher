@@ -168,6 +168,10 @@ struct FG01BuildHistoryEntry
 
     UPROPERTY()
     FString CandidateReleasePath;
+
+    /** 唯一标识：{BasePackageVersion}_{BaseVersion}_to_{TargetVersion}_{PatchType} */
+    UPROPERTY()
+    FString PatchId;
 };
 
 // ---- BuildHistory 根 ----

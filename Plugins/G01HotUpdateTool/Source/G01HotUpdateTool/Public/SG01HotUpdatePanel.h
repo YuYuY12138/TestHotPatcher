@@ -28,6 +28,7 @@ private:
     FString SelectedBaseVersion;
     FString InputTargetVersion;
     FString SelectedPromotePatchVersion;
+    int32 PatchTypeIndex = 0;
 
     // ---- 下拉选项 ----
     TArray<TSharedPtr<FString>> BaseVersionOptions;

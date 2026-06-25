@@ -39,6 +39,10 @@ struct FG01VersionManifest
     UPROPERTY()
     FString PatchType;
 
+    /** 唯一标识：{BasePackageVersion}_{BaseVersion}_to_{TargetVersion}_{PatchType} */
+    UPROPERTY()
+    FString PatchId;
+
     UPROPERTY()
     FString Platform;
 

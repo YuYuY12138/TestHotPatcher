@@ -234,14 +234,20 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
         return 3;
     }
 
-    FString PatchDir = FPaths::Combine(OutputRoot, TEXT("Patches"), Task.TargetVersion);
+    FString PatchDir = FPaths::Combine(OutputRoot, TEXT("Patches"),
+        FString::Printf(TEXT("BasePackage_%s"), *Task.BasePackageVersion),
+        Task.TargetVersion,
+        FString::Printf(TEXT("%s_to_%s_%s"), *Task.BaseVersion, *Task.TargetVersion, *Task.PatchType));
     PF.CreateDirectoryTree(*PatchDir);
+
+    FString PatchId = FString::Printf(TEXT("%s_%s_to_%s_%s"),
+        *Task.BasePackageVersion, *Task.BaseVersion, *Task.TargetVersion, *Task.PatchType);
 
     // 提前加载 History 用于跨链校验
     FG01BuildHistory Hist; Hist.LoadFromFile(HistPath);
 
-    UE_LOG(LogTemp, Display, TEXT("Building Patch %s->%s (BasePackage=%s) ..."),
-        *Task.BaseVersion, *Task.TargetVersion, *Task.BasePackageVersion);
+    UE_LOG(LogTemp, Display, TEXT("Building Patch %s->%s (BasePackage=%s, PatchId=%s) ..."),
+        *Task.BaseVersion, *Task.TargetVersion, *Task.BasePackageVersion, *PatchId);
     UE_LOG(LogTemp, Warning, TEXT(">>> Confirm: workspace must include %s changes <<<"), *Task.TargetVersion);
 
     FString Err;
@@ -319,8 +325,22 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
     Manifest.BasePackageVersion = Task.BasePackageVersion;
     Manifest.BaseVersion = Task.BaseVersion;
     Manifest.PatchType = Task.PatchType;
+    Manifest.PatchId = PatchId;
     Manifest.Platform = Task.Platform;
     Manifest.BuildTime = BuildTimeStr;
+
+    // Consolidated 时自动收集 ContainsVersions
+    if (Task.PatchType == TEXT("Consolidated"))
+    {
+        for (const FG01BuildHistoryEntry& E : Hist.Entries)
+        {
+            if (E.PatchType != TEXT("Release") && E.bSuccess && E.BasePackageVersion == Task.BasePackageVersion)
+            {
+                Manifest.ContainsVersions.AddUnique(E.TargetVersion);
+            }
+        }
+        Manifest.ContainsVersions.AddUnique(Task.TargetVersion);
+    }
 
     int64 TotalSize = 0;
     FString FirstMD5;
@@ -378,13 +398,16 @@ int32 UG01HotPatchCommandlet::ExecuteBuildPatch(
         Entry.TotalPakSize = TotalSize;
         Entry.PakMD5 = FirstMD5;
         Entry.CandidateReleasePath = CandidateReleasePath;
-        Entry.ReportPath = FString::Printf(TEXT("Patches/%s/BuildReport_%s.json"), *Task.TargetVersion, *Task.TargetVersion);
+        Entry.ContainsVersions = Manifest.ContainsVersions;
+        Entry.PatchId = PatchId;
+        Entry.ReportPath = FString::Printf(TEXT("Patches/BasePackage_%s/%s/%s_to_%s_%s/BuildReport_%s.json"),
+            *Task.BasePackageVersion, *Task.TargetVersion, *Task.BaseVersion, *Task.TargetVersion, *Task.PatchType, *Task.TargetVersion);
         Hist.AddEntry(Entry);
         Hist.SaveToFile(HistPath);
     }
 
-    UE_LOG(LogTemp, Display, TEXT("BUILD PATCH COMPLETE: %s->%s BasePackage=%s (%.1fs)"),
-        *Task.BaseVersion, *Task.TargetVersion, *Task.BasePackageVersion, FPlatformTime::Seconds() - StartTime);
+    UE_LOG(LogTemp, Display, TEXT("BUILD PATCH COMPLETE: %s->%s BasePackage=%s PatchId=%s (%.1fs)"),
+        *Task.BaseVersion, *Task.TargetVersion, *Task.BasePackageVersion, *PatchId, FPlatformTime::Seconds() - StartTime);
     return 0;
 }
 
